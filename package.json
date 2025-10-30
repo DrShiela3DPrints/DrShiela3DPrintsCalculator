@@ -1,15 +1,16 @@
 {
-  "name": "drshiela3dprints-calculator",
+  "name": "DrShiela3DPrintsCalculator",
   "version": "1.0.0",
   "private": true,
+  "homepage": "https://drshiela3dprints.github.io/DrShiela3DPrintsCalculator",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.0",
