@@ -202,7 +202,7 @@ export default function DrShiela3DPrintsCalculator() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           {/* LEFT: Price per Gram Choice */}
           <section className="col-span-1 space-y-3 rounded-2xl bg-white p-4 shadow">
-            <h2 className="mb-1 text-lg font-semibold">Material Cost</h2>
+            <h2 className="mb-1 text-lg font-semibold">Price per Gram</h2>
 
             {/* Derive from spool (checkbox) */}
             <div className="flex items-center gap-2" title="Use spool price and weight to compute PHP/g (Gamitin ang presyo at bigat ng spool para sa PHP/g)">
