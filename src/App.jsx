@@ -392,8 +392,8 @@ export default function App() {
                 👍 Like <span className="ml-1 inline-block rounded bg-gray-200 px-2 text-xs">{pretty(s.likesCount)}</span>
               </button>
               <div className="flex gap-2">
-                <a href={s.facebookUrl} target="_blank" rel="noreferrer" className="rounded-2xl border px-3 py-2 text-sm shadow-sm" title="Follow me on Facebook for more 3D printing tips (I-follow ako sa Facebook para sa higit pang 3D printing tips)">Facebook</a>
-                <a href={s.youtubeUrl} target="_blank" rel="noreferrer" className="rounded-2xl border px-3 py-2 text-sm shadow-sm" title="Follow me on YouTube for more 3D printing tips (Sundan ninyo ako sa YouTube para sa higit pang 3D printing tips)">YouTube</a>
+                <a href={s.facebookUrl} target="_blank" rel="noreferrer" className="rounded-2xl border px-3 py-2 text-sm shadow-sm" title="Follow me on Facebook for more 3D printing tips (I-follow ako sa Facebook para sa more 3D printing tips)">Facebook</a>
+                <a href={s.youtubeUrl} target="_blank" rel="noreferrer" className="rounded-2xl border px-3 py-2 text-sm shadow-sm" title="Follow me on YouTube for more 3D printing tips (Sundan ninyo ako sa YouTube para sa more 3D printing tips)">YouTube</a>
               </div>
             </div>
           </section>
