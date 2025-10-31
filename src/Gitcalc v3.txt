@@ -1,10 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 /**
- * DS3DPC v1 — Dr Shiela 3D Prints 3D Printing Calculator (single-file App.jsx)
- * - Full calculator reloaded with: bold support message above social buttons; FB blue / YT red buttons.
- * - Keeps BOM fix via String.fromCharCode(0xFEFF) and self-test cases.
- * - Like button removed; social buttons live in LEFT column under Usage.
+ * Dr Shiela 3D Prints 3D Printing Calculator — Full Production (single-file App.jsx)
+ * Update: Depreciation – C–L–R legend, "How to compute" section, monthly hours, and explanatory note.
+ * - Column 1: Material Cost (with "Price per Gram (2 Ways. Choose 1)" + Filament Consumed (g))
+ * - Column 2: Print & Power + Labor + Depreciation (C, L, R legend; Annual/Monthly/Hourly; copy per-hour)
+ * - Column 3: Other Costs + Margins + Computed Summary
+ * - Save/Load/Delete up to 3 named slots
+ * - Download All (.csv) and per-save (.csv) — Excel-friendly
+ * - Local persistence via localStorage
  */
 
 function pretty(num) {
@@ -28,8 +32,8 @@ function usePersistedState(key, initial) {
 }
 
 export default function App() {
-  const [s, setS] = usePersistedState("ds3dpc_v1", {
-    label: "DS3DPC v1 – Dr Shiela 3D Prints 3D Printing Calculator",
+  const [s, setS] = usePersistedState("ds3dp_full_v1", {
+    label: "Dr Shiela 3D Prints 3D Printing Calculator",
 
     // Mutually exclusive pricing option: 'derive' or 'fixed'
     pricingMode: "derive",
@@ -56,8 +60,8 @@ export default function App() {
 
     // Depreciation (Column 2)
     useDepreciation: false,
-    depreciationRatePerHour: 15, // PHP/hr (legacy for old saves in CSV)
-    // C-L-R inputs + usage hours per month (for hourly)
+    depreciationRatePerHour: 15, // PHP/hr (used by calculator)
+    // C-L-R legend inputs + usage hours per month (for hourly)
     assetCostPHP: "",          // C — cost of asset (printer) incl. shipping/taxes
     lifespanYears: "",         // L — useful life in years
     residualValuePHP: "",      // R — value at end of life (resale/scrap)
@@ -66,6 +70,10 @@ export default function App() {
     // Margins
     failureMarginPct: 10,
     markupPct: 20,
+
+    // Likes (device-local only)
+    likesCount: Number(localStorage.getItem("ds3dp_likesCount") || 0),
+    liked: JSON.parse(localStorage.getItem("ds3dp_liked") || "false"),
 
     // Links
     facebookUrl: "https://www.facebook.com/drshiela3dprints/",
@@ -101,16 +109,69 @@ export default function App() {
   const hourlyDep = Hm > 0 ? (annualDep / (Hm * 12)) : 0;            // per hour from monthly hours
 
   // The calculator ONLY uses per-hour depreciation × print hours
-  const depreciationCost = s.useDepreciation ? (hourlyDep * Number(s.printTimeHours)) : 0;
+  const depreciationRateHrUsed = Number(s.depreciationRatePerHour) || 0;
+  const depreciationCost = s.useDepreciation ? depreciationRateHrUsed * Number(s.printTimeHours) : 0;
 
   const otherCosts = Number(s.packaging) + Number(s.paint) + Number(s.adhesives) + Number(s.shipping);
   const baseSubtotal = materialCost + electricityCost + Number(s.laborCost) + otherCosts + depreciationCost;
   const withFailure = baseSubtotal * (1 + Number(s.failureMarginPct) / 100);
   const finalPrice = withFailure * (1 + Number(s.markupPct) / 100);
 
+  // Like button
+  const toggleLike = () => {
+    if (s.liked) return;
+    const next = (Number(s.likesCount) || 0) + 1;
+    setS({ ...s, likesCount: next, liked: true });
+    localStorage.setItem("ds3dp_liked", "true");
+    localStorage.setItem("ds3dp_likesCount", String(next));
+  };
+
   const setMode = (mode) => setS({ ...s, pricingMode: mode });
 
-  // ===== CSV helpers =====
+  // ===== SAVE/LOAD/DELETE (max 3) =====
+  const doSave = () => {
+    let name = (s.productName || "").trim();
+    if (!name) {
+      const typed = prompt("Enter product name to save (Ilagay ang pangalan ng produkto):");
+      if (!typed) return;
+      name = String(typed).trim();
+    }
+    // exclude volatile fields
+    const { saves, productName, ...data } = s;
+    const snapshot = { name, ts: Date.now(), data };
+
+    let newSaves = Array.isArray(s.saves) ? [...s.saves] : [];
+    if (newSaves.length >= 3) {
+      const confirmOverride = confirm(
+        `You already have 3 saves. Override the 1st save with "${newSaves[0].name}" and push others down?\n\n` +
+        `May 3 saves ka na. I-override ang unang save ("${newSaves[0].name}") at itulak pababa ang iba?`
+      );
+      if (!confirmOverride) return;
+      newSaves = [snapshot, ...newSaves].slice(0, 3);
+    } else {
+      newSaves = [snapshot, ...newSaves];
+    }
+    setS({ ...s, saves: newSaves, productName: name });
+    alert(`Saved: ${name}`);
+  };
+
+  const loadSave = (idx) => {
+    const entry = s.saves[idx];
+    if (!entry) return;
+    const loaded = { ...entry.data, saves: s.saves, productName: entry.name };
+    setS(loaded);
+  };
+
+  const deleteSave = (idx) => {
+    const entry = s.saves[idx];
+    if (!entry) return;
+    const ok = confirm(`Delete save "${entry.name}"? (Burahin ang save na ito?)`);
+    if (!ok) return;
+    const newSaves = s.saves.filter((_, i) => i !== idx);
+    setS({ ...s, saves: newSaves });
+  };
+
+  // ===== CSV EXPORT =====
   const csvHeaders = [
     "Name","Saved At","Pricing Mode","Spool Price","Spool Weight (g)","Fixed Price/g",
     "Filament Consumed (g)","Print Time (hrs)","Wattage (W)","kWh Price",
@@ -120,10 +181,10 @@ export default function App() {
     "Subtotal","With Failure","Final Price"
   ];
 
-  const csvEscape = (val) => {
-    const str = String(val ?? "");
-    const esc = str.replace(/"/g, '""');
-    return '"' + esc + '"';
+  const csvEscape = (v) => {
+    const s = String(v ?? "");
+    const esc = typeof s.replaceAll === "function" ? s.replaceAll('"','""') : s.replace(/"/g,'""');
+    return `"${esc}"`;
   };
 
   const toCsvRow = (entry) => {
@@ -134,8 +195,7 @@ export default function App() {
 
     const weight = Number(d.partWeight)||0;
     const mat = weight * ppg;
-    const elec = ((Number(d.wattage)||0) * (Number(d.printTimeHours)||0) / 1000) * (Number(d.kwhPrice)||0);
-    // For old saves, use the stored per-hour value if present; live UI computes hourlyDep
+    const elec = ( (Number(d.wattage)||0) * (Number(d.printTimeHours)||0) / 1000 ) * (Number(d.kwhPrice)||0);
     const dep = d.useDepreciation ? (Number(d.depreciationRatePerHour)||0) * (Number(d.printTimeHours)||0) : 0;
     const others = (Number(d.packaging)||0) + (Number(d.paint)||0) + (Number(d.adhesives)||0) + (Number(d.shipping)||0);
     const sub = mat + elec + (Number(d.laborCost)||0) + others + dep;
@@ -174,118 +234,34 @@ export default function App() {
     return cells.map(v => (typeof v === "string" ? csvEscape(v) : v)).join(",");
   };
 
-  const BOM = String.fromCharCode(0xFEFF);
-
   const downloadCSV = (rows, filename) => {
-    // Explicit \n sequences; prepend BOM for Excel/Numbers friendliness
-    const content = BOM + csvHeaders.join(",") + "\n" + rows.join("\n");
-    const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+    const blob = new Blob(
+      ["\uFEFF" + csvHeaders.join(",") + "\n" + rows.join("\n")],
+      { type: "text/csv;charset=utf-8;" }
+    );
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = filename.endsWith(".csv") ? filename : (filename + ".csv");
+    a.download = filename.endsWith(".csv") ? filename : `${filename}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
-  // ===== SAVE/LOAD/DELETE (max 3) =====
-  const doSave = () => {
-    let name = (s.productName || "").trim();
-    if (!name) {
-      const typed = prompt("Enter product name to save (Ilagay ang pangalan ng produkto):");
-      if (!typed) return;
-      name = String(typed).trim();
-    }
-    // exclude volatile fields
-    const { saves, productName, ...data } = s;
-    const snapshot = { name, ts: Date.now(), data };
-
-    let newSaves = Array.isArray(s.saves) ? [...s.saves] : [];
-    if (newSaves.length >= 3) {
-      const confirmOverride = confirm(
-        `You already have 3 saves. Override the 1st save ("${newSaves[0].name}") and push others down?\n\n` +
-        `May 3 saves ka na. I-override ang unang save ("${newSaves[0].name}") at itulak pababa ang iba?`
-      );
-      if (!confirmOverride) return;
-      newSaves = [snapshot, ...newSaves].slice(0, 3);
-    } else {
-      newSaves = [snapshot, ...newSaves];
-    }
-    setS({ ...s, saves: newSaves, productName: name });
-    alert(`Saved: ${name}`);
-  };
-
-  const loadSave = (idx) => {
-    const entry = s.saves[idx];
-    if (!entry) return;
-    const loaded = { ...entry.data, saves: s.saves, productName: entry.name };
-    setS(loaded);
-  };
-
-  const deleteSave = (idx) => {
-    const entry = s.saves[idx];
-    if (!entry) return;
-    const ok = confirm(`Delete save "${entry.name}"? (Burahin ang save na ito?)`);
-    if (!ok) return;
-    const newSaves = s.saves.filter((_, i) => i !== idx);
-    setS({ ...s, saves: newSaves });
-  };
-
   const downloadOneSave = (idx) => {
     const entry = s.saves[idx];
     if (!entry) return;
-    downloadCSV([toCsvRow(entry)], (entry.name || "save"));
+    downloadCSV([toCsvRow(entry)], `${entry.name || "save"}`);
   };
 
   const downloadAllSaves = () => {
     if (!s.saves || s.saves.length === 0) { alert("No saves to download."); return; }
     const rows = s.saves.map(toCsvRow);
-    downloadCSV(rows, "DS3DPC_Saves_" + new Date().toISOString().slice(0,10));
+    downloadCSV(rows, `DS3DP_Saves_${new Date().toISOString().slice(0,10)}`);
   };
 
   const fmtDate = (ts) => new Date(ts).toLocaleString();
-
-  // ===== (Tiny) Self-test – helps catch regressions quickly =====
-  const selfTest = () => {
-    try {
-      // Case 1: Baseline CSV row generation has no embedded newlines
-      const entry = {
-        name: 'Test Item',
-        ts: Date.now(),
-        data: {
-          pricingMode: 'fixed', spoolPrice: 1000, spoolWeight: 1000, fixedPerGram: 2,
-          partWeight: 12.5, printTimeHours: 3.5, wattage: 120, kwhPrice: 12,
-          laborCost: 50, packaging: 10, paint: 0, adhesives: 0, shipping: 0,
-          useDepreciation: true, depreciationRatePerHour: 15,
-          failureMarginPct: 10, markupPct: 20,
-        }
-      };
-      const row = toCsvRow(entry);
-      if (!row || typeof row !== 'string' || row.indexOf('\n') !== -1) throw new Error('Row format invalid');
-
-      // Case 2: Escaping quotes inside values
-      const quoted = toCsvRow({ ...entry, name: 'He said "hello"' });
-      if (!quoted.startsWith('"He said ""hello"""')) throw new Error('CSV quote escaping failed');
-
-      // Case 3: Depreciation math sanity: C=50,000, R=15,000, L=5, Hm=150 → hourly ≈ 3.8889
-      const C0 = 50000, R0 = 15000, L0 = 5, Hm0 = 150;
-      const annual0 = (C0 - R0) / L0; // 7000
-      const hourly0 = annual0 / (Hm0 * 12); // 7000 / 1800 = 3.888...
-      const close = (a,b,eps=0.02) => Math.abs(a-b) < eps;
-      if (!close(hourly0, 3.8889, 0.02)) throw new Error('Depreciation hourly calc check failed');
-
-      // BOM presence
-      const rows = [row, quoted];
-      const content = BOM + csvHeaders.join(",") + "\n" + rows.join("\n");
-      if (content.charCodeAt(0) !== 0xFEFF) throw new Error('Missing BOM');
-
-      alert('Self-test passed: CSV & depreciation checks OK.');
-    } catch (e) {
-      alert('Self-test FAILED: ' + e.message);
-    }
-  };
 
   // ===== UI =====
   return (
@@ -314,7 +290,6 @@ export default function App() {
             <button onClick={doSave} className="rounded-2xl border px-3 py-2 text-sm shadow-sm">Save</button>
             <button onClick={downloadAllSaves} className="rounded-2xl border px-3 py-2 text-sm shadow-sm">Download All (.csv)</button>
             <button onClick={()=>setMode(s.pricingMode === 'derive' ? 'fixed' : 'derive')} className="rounded-2xl border px-3 py-2 text-sm shadow-sm">Toggle Mode</button>
-            <button onClick={selfTest} className="rounded-2xl border px-3 py-2 text-sm shadow-sm" title="Runs a couple of sanity checks on CSV">Run self‑test</button>
           </div>
         </header>
 
@@ -331,7 +306,7 @@ export default function App() {
               <label className="font-medium">Derive from spool</label>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Field label={"Spool price (" + PHP + ")"} hint="Total cost of one filament spool (Kung magkano mo nabili ang 1 spool ng filament).">
+              <Field label={`Spool price (${PHP})`} hint="Total cost of one filament spool (Kung magkano mo nabili ang 1 spool ng filament).">
                 <Num value={s.spoolPrice} onChange={(v)=>setS({...s, spoolPrice:v})} />
               </Field>
               <Field label="Spool weight (g)" hint="Weight of the entire spool, usually 1000 g (Bigat ng buong spool, usually 1000 g (1kg)).">
@@ -355,15 +330,6 @@ export default function App() {
             <Field label="Filament consumed (g)" hint="From your slicer’s estimate (Mula sa estimate ng slicer. Makikita mo sa preview after mag-slice).">
               <Num value={s.partWeight} onChange={(v)=>setS({...s, partWeight:v})} />
             </Field>
-
-            {/* Support message + Social buttons */}
-            <div className="mt-4 text-sm bg-yellow-50 p-3 rounded">
-              <strong>Kung nakatulong sa’yo ang calculator na ito, please support me para makagawa pa ako ng mga content na makakatulong sa 3D printing journey mo. Follow me on Youtube and Facebook.</strong>
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <a href={s.facebookUrl} target="_blank" rel="noreferrer" className="rounded-2xl border border-blue-600 bg-blue-600 text-white px-3 py-2 text-sm shadow-sm" title="Follow me on Facebook">Facebook</a>
-              <a href={s.youtubeUrl} target="_blank" rel="noreferrer" className="rounded-2xl border border-red-600 bg-red-600 text-white px-3 py-2 text-sm shadow-sm" title="Follow me on YouTube">YouTube</a>
-            </div>
           </section>
 
           {/* MIDDLE: Print & Power + Labor + Depreciation */}
@@ -373,76 +339,82 @@ export default function App() {
               <Field label="Print time (hours)" hint="Total printing duration (Kabuuang oras ng pagpi-print. Makikita rin sa slicer).">
                 <Num value={s.printTimeHours} onChange={(v)=>setS({...s, printTimeHours:v})} />
               </Field>
-              <Field label="Printer wattage (W)" hint="Average power draw of your printer (Average na konsumo ng kuryente ng machine. I-check sa internet ang specs ng 3D printer mo).">
+              <Field label="Printer wattage (W)" hint="Average power draw of your printer (Karaniwang konsumo ng kuryente ng machine).">
                 <Num value={s.wattage} onChange={(v)=>setS({...s, wattage:v})} />
               </Field>
             </div>
-            <Field label={"Electricity price (" + PHP + "/kWh)"} hint="Your electric rate per kWh (Presyo ng kuryente kada kWh. Check your electricity bill).">
+            <Field label={`Electricity price (${PHP}/kWh)`} hint="Your electric rate per kWh (Presyo ng kuryente kada kWh. Check your electricity bill).">
               <Num value={s.kwhPrice} onChange={(v)=>setS({...s, kwhPrice:v})} />
             </Field>
 
             <h2 className="mt-4 text-lg font-semibold">Labor (direct cost)</h2>
-            <Field label={"Labor cost (" + PHP + ")"} hint="Your time cost (e.g., cleaning, support removal, post-processing) (Gastos sa oras/ paggawa).">
+            <Field label={`Labor cost (${PHP})`} hint="Your time cost (e.g., cleaning, support removal, post-processing) (Gastos sa oras/ paggawa).">
               <Num value={s.laborCost} onChange={(v)=>setS({...s, laborCost:v})} />
             </Field>
 
             {/* Depreciation with checkbox in header + note + How to compute */}
-            <h2 className="mt-4 text-lg font-semibold flex items-center justify-between">
-              <span>Depreciation</span>
-              <input
-                type="checkbox"
-                checked={s.useDepreciation}
-                onChange={(e)=>setS({ ...s, useDepreciation: e.target.checked })}
-                title="Enable depreciation"
-                className="w-4 h-4"
-              />
-            </h2>
-            <p className="text-[11px] text-gray-600 mt-1">Enable depreciation (I-activate ang depreciation)</p>
-            <p className="text-xs text-gray-700 bg-amber-50 border border-amber-200 rounded p-2 mt-2">
-              <strong>Note:</strong> Even if your printer is fully paid, it still loses value over time due to wear and tear, aging technology, and eventual replacement. Depreciation helps you recover part of that value through each print job’s price. <em>(Kahit fully paid na ang 3D printer mo, unti-unti pa rin itong nawawalan ng value dahil sa wear and tear, luma na ang technology, at kailangan din eventually palitan. Sa pamamagitan ng depreciation, nababawi mo nang paunti-unti ang halaga nito sa presyo ng bawat print job.)</em>
-            </p>
+<h2 className="mt-4 text-lg font-semibold flex items-center justify-between">
+  <span>Depreciation</span>
+  <input
+    type="checkbox"
+    checked={s.useDepreciation}
+    onChange={(e)=>setS({ ...s, useDepreciation: e.target.checked })}
+    title="Enable depreciation"
+    className="w-4 h-4"
+  />
+</h2>
+<p className="text-[11px] text-gray-600 mt-1">Enable depreciation (I-activate ang depreciation)</p>
+<p className="text-xs text-gray-700 bg-amber-50 border border-amber-200 rounded p-2 mt-2">
+  <strong>Note:</strong> Even if your printer is fully paid, it still loses value over time due to wear and tear, aging technology, and eventual replacement — depreciation helps you recover part of that value through each print job’s price. <em>Kahit fully paid na ang 3D printer mo, unti-unti pa rin itong nawawalan ng value dahil sa wear and tear, luma na ang technology, at kailangan din eventually palitan. Sa pamamagitan ng depreciation, nababawi mo nang paunti-unti ang halaga nito sa presyo ng bawat print job.</em>
+</p>
 
-            { s.useDepreciation && (
-              <>
-                {/* How to compute */}
-                <div className="rounded-2xl border p-3 text-sm bg-gray-50">
-                  <div className="font-medium mb-2">How to compute</div>
-                  <div className="text-xs text-gray-700 mb-3 space-y-1">
-                    <div><strong>C — Cost of Asset</strong>: Total you paid for the printer, including shipping and taxes. <em>Example: ₱50,000</em></div>
-                    <div><strong>L — Useful Life (years)</strong>: How long you expect to use the printer before replacement. <em>Example: 5 years</em></div>
-                    <div><strong>R — Residual Value</strong>: Estimated value at end of life (secondhand or scrap). <em>Example: ₱15,000</em></div>
-                  </div>
-                  <div className="text-xs text-gray-600 mb-2">
-                    <strong>Annual Depreciation Expense</strong> = (C − R) ÷ L. We also show monthly and hourly. Hourly divides Annual by your estimated average printing hours per month × 12.
-                  </div>
-                  {/* Stacked inputs */}
-                  <div className="grid grid-cols-1 gap-3">
-                    <Field label={"C: Cost of Asset (" + PHP + ")"}><Num value={s.assetCostPHP} onChange={(v)=>setS({...s, assetCostPHP:v})} placeholder="e.g. 50000" /></Field>
-                    <Field label={`L: Useful Life (years)`}><Num value={s.lifespanYears} onChange={(v)=>setS({...s, lifespanYears:v})} placeholder="e.g. 5" /></Field>
-                    <Field label={"R: Residual Value (" + PHP + ")"}><Num value={s.residualValuePHP} onChange={(v)=>setS({...s, residualValuePHP:v})} placeholder="e.g. 15000" /></Field>
-                    <Field label={`Estimated average printing hours per month`} hint="Gaano katagal tumatakbo ang 3D printer mo sa isang buwan, sa tantiya mo? Example: 150 hours">
-                      <Num value={s.hoursPerMonth} onChange={(v)=>setS({...s, hoursPerMonth:v})} placeholder="e.g. 150" />
-                    </Field>
-                  </div>
-                  {(C>0 && L>0) ? (
-                    <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
-                      <div className="rounded border p-2"><div className="text-xs text-gray-500">Annual</div><div className="font-semibold">{PHP} {pretty(annualDep)}</div></div>
-                      <div className="rounded border p-2"><div className="text-xs text-gray-500">Monthly</div><div className="font-semibold">{PHP} {pretty(monthlyDep)}</div></div>
-                      <div className="rounded border p-2"><div className="text-xs text-gray-500">Hourly</div><div className="font-semibold">{PHP} {pretty(hourlyDep)}</div></div>
-                    </div>
-                  ) : (
-                    <div className="mt-2 text-xs text-gray-500">Enter C, L, and R (and monthly hours) to compute rates.</div>
-                  )}
-                  <div className="mt-3">
-                    <div className="rounded-xl border p-3 bg-white">
-                      <div className="text-xs text-gray-500">Final computed depreciation rate</div>
-                      <div className="text-base font-semibold">{PHP} {pretty(hourlyDep)} / hr</div>
-                    </div>
-                  </div>
-                </div>
-              </>
-            ) }
-          </section>
+{ s.useDepreciation && (
+  <>
+    {/* Per-hour used by calculator */}
+    <Field label={`Per hour rate used by calculator (${PHP}/hr)`} hint="This value is multiplied by Print time (hours).">
+      <Num value={s.depreciationRatePerHour} onChange={(v)=>setS({...s, depreciationRatePerHour:v})} />
+    </Field>
+
+    {/* How to compute */}
+    <div className="rounded-2xl border p-3 text-sm bg-gray-50">
+      <div className="font-medium mb-2">How to compute (Straight-line)</div>
+      <div className="text-xs text-gray-700 mb-3 space-y-1">
+        <div><strong>C — Cost of Asset</strong>: Total you paid for the printer, including shipping and taxes. <em>Example: ₱50,000</em></div>
+        <div><strong>L — Useful Life (years)</strong>: How long you expect to use the printer before replacement. <em>Example: 5 years</em></div>
+        <div><strong>R — Residual Value</strong>: Estimated value at end of life (secondhand or scrap). <em>Example: ₱15,000</em></div>
+      </div>
+      <div className="text-xs text-gray-600 mb-2">
+        <strong>Annual Depreciation Expense</strong> = (C − R) ÷ L. We also show monthly and hourly. Hourly divides Annual by your <strong>estimated average printing hours per month × 12</strong>. Only the <strong>hourly</strong> is used by the calculator when you click the button below.
+      </div>
+      {/* Stacked inputs */}
+      <div className="grid grid-cols-1 gap-3">
+        <Field label={`C: Cost of Asset (${PHP})`}><Num value={s.assetCostPHP} onChange={(v)=>setS({...s, assetCostPHP:v})} placeholder="e.g. 50000" /></Field>
+        <Field label={`L: Useful Life (years)`}><Num value={s.lifespanYears} onChange={(v)=>setS({...s, lifespanYears:v})} placeholder="e.g. 5" /></Field>
+        <Field label={`R: Residual Value (${PHP})`}><Num value={s.residualValuePHP} onChange={(v)=>setS({...s, residualValuePHP:v})} placeholder="e.g. 15000" /></Field>
+        <Field label={`Estimated average printing hours per month`} hint="Gaano katagal tumatakbo ang 3D printer mo sa isang buwan, sa tantiya mo? Example: 150 hours">
+          <Num value={s.hoursPerMonth} onChange={(v)=>setS({...s, hoursPerMonth:v})} placeholder="e.g. 150" />
+        </Field>
+      </div>
+      {(C>0 && L>0) ? (
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="rounded border p-2"><div className="text-xs text-gray-500">Annual</div><div className="font-semibold">{PHP} {pretty(annualDep)}</div></div>
+          <div className="rounded border p-2"><div className="text-xs text-gray-500">Monthly</div><div className="font-semibold">{PHP} {pretty(monthlyDep)}</div></div>
+          <div className="rounded border p-2"><div className="text-xs text-gray-500">Hourly</div><div className="font-semibold">{PHP} {pretty(hourlyDep)}</div></div>
+        </div>
+      ) : (
+        <div className="mt-2 text-xs text-gray-500">Enter C, L, and R (and monthly hours) to compute rates.</div>
+      )}
+      <div className="mt-3">
+        <button className="rounded border px-3 py-2 text-sm"
+          onClick={()=>setS({...s, depreciationRatePerHour: hourlyDep ? Number(hourlyDep.toFixed(2)) : s.depreciationRatePerHour})}
+          title="Copy the computed hourly into the calculator field"
+          disabled={!(C>0 && L>0 && Hm>0)}
+        >Use this hourly rate</button>
+      </div>
+    </div>
+  </>
+)}
+</section>
 
           {/* RIGHT: Other Costs + Margins + Summary */}
           <section className="col-span-1 space-y-3 rounded-2xl bg-white p-4 shadow">
@@ -482,10 +454,20 @@ export default function App() {
               {s.useDepreciation ? <Row label="Depreciation">{PHP} {pretty(depreciationCost)}</Row> : null}
               <hr />
               <Row label="Subtotal">{PHP} {pretty(baseSubtotal)}</Row>
-              <Row label={"+ Failure margin (" + s.failureMarginPct + "%)"}>{PHP} {pretty(withFailure)}</Row>
-              <Row label={"Final price (+ markup " + s.markupPct + "%)"} strong>
+              <Row label={`+ Failure margin (${s.failureMarginPct}%)`}>{PHP} {pretty(withFailure)}</Row>
+              <Row label={`Final price (+ markup ${s.markupPct}%)`} strong>
                 {PHP} {pretty(finalPrice)}
               </Row>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between">
+              <button onClick={toggleLike} className={`rounded-2xl px-3 py-2 text-sm shadow-sm border ${s.liked ? 'bg-gray-100' : 'bg-white'}`} title={s.liked ? 'Thanks!' : 'Like this calculator'}>
+                👍 Like <span className="ml-1 inline-block rounded bg-gray-200 px-2 text-xs">{pretty(s.likesCount)}</span>
+              </button>
+              <div className="flex gap-2">
+                <a href={s.facebookUrl} target="_blank" rel="noreferrer" className="rounded-2xl border px-3 py-2 text-sm shadow-sm" title="Follow me on Facebook for more 3D printing tips (I-follow ako sa Facebook para sa more 3D printing tips)">Facebook</a>
+                <a href={s.youtubeUrl} target="_blank" rel="noreferrer" className="rounded-2xl border px-3 py-2 text-sm shadow-sm" title="Follow me on YouTube for more 3D printing tips (Sundan ninyo ako sa YouTube para sa more 3D printing tips)">YouTube</a>
+              </div>
             </div>
           </section>
         </div>
@@ -520,7 +502,7 @@ export default function App() {
         </section>
 
         <footer className="mt-6 text-center text-xs text-gray-500">
-          Built for GitHub Pages · DS3DPC v1 · PHP only
+          Built for GitHub Pages · DS3DP · PHP only
         </footer>
       </div>
     </div>

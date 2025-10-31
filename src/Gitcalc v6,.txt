@@ -2,9 +2,10 @@ import React, { useEffect, useMemo, useState } from "react";
 
 /**
  * DS3DPC v1 — Dr Shiela 3D Prints 3D Printing Calculator (single-file App.jsx)
- * - Full calculator reloaded with: bold support message above social buttons; FB blue / YT red buttons.
- * - Keeps BOM fix via String.fromCharCode(0xFEFF) and self-test cases.
- * - Like button removed; social buttons live in LEFT column under Usage.
+ * - Fix build error: removed stray "$1" and incorrect escaped quotes in JSX
+ * - Avoids sensitive \u escapes by creating BOM via String.fromCharCode(0xFEFF)
+ * - Like button removed; Facebook/YouTube moved to left column under Usage
+ * - Adds stronger self-test coverage (CSV escaping + depreciation math)
  */
 
 function pretty(num) {
@@ -56,7 +57,7 @@ export default function App() {
 
     // Depreciation (Column 2)
     useDepreciation: false,
-    depreciationRatePerHour: 15, // PHP/hr (legacy for old saves in CSV)
+    depreciationRatePerHour: 15, // PHP/hr (legacy; used only for CSV on old saves)
     // C-L-R inputs + usage hours per month (for hourly)
     assetCostPHP: "",          // C — cost of asset (printer) incl. shipping/taxes
     lifespanYears: "",         // L — useful life in years
@@ -135,7 +136,7 @@ export default function App() {
     const weight = Number(d.partWeight)||0;
     const mat = weight * ppg;
     const elec = ((Number(d.wattage)||0) * (Number(d.printTimeHours)||0) / 1000) * (Number(d.kwhPrice)||0);
-    // For old saves, use the stored per-hour value if present; live UI computes hourlyDep
+    // For old saves, use the stored per-hour value if present; otherwise 0 (DS3DPC computes hourly live)
     const dep = d.useDepreciation ? (Number(d.depreciationRatePerHour)||0) * (Number(d.printTimeHours)||0) : 0;
     const others = (Number(d.packaging)||0) + (Number(d.paint)||0) + (Number(d.adhesives)||0) + (Number(d.shipping)||0);
     const sub = mat + elec + (Number(d.laborCost)||0) + others + dep;
@@ -270,13 +271,13 @@ export default function App() {
       if (!quoted.startsWith('"He said ""hello"""')) throw new Error('CSV quote escaping failed');
 
       // Case 3: Depreciation math sanity: C=50,000, R=15,000, L=5, Hm=150 → hourly ≈ 3.8889
-      const C0 = 50000, R0 = 15000, L0 = 5, Hm0 = 150;
-      const annual0 = (C0 - R0) / L0; // 7000
-      const hourly0 = annual0 / (Hm0 * 12); // 7000 / 1800 = 3.888...
-      const close = (a,b,eps=0.02) => Math.abs(a-b) < eps;
-      if (!close(hourly0, 3.8889, 0.02)) throw new Error('Depreciation hourly calc check failed');
+      const C = 50000, R = 15000, L = 5, Hm = 150;
+      const annual = (C - R) / L; // 7000
+      const hourly = annual / (Hm * 12); // 7000 / 1800 = 3.888...
+      const close = (a,b,eps=0.01) => Math.abs(a-b) < eps;
+      if (!close(hourly, 3.8889, 0.02)) throw new Error('Depreciation hourly calc check failed');
 
-      // BOM presence
+      // Build a faux file string and ensure it has the BOM prefix
       const rows = [row, quoted];
       const content = BOM + csvHeaders.join(",") + "\n" + rows.join("\n");
       if (content.charCodeAt(0) !== 0xFEFF) throw new Error('Missing BOM');
@@ -356,13 +357,10 @@ export default function App() {
               <Num value={s.partWeight} onChange={(v)=>setS({...s, partWeight:v})} />
             </Field>
 
-            {/* Support message + Social buttons */}
-            <div className="mt-4 text-sm bg-yellow-50 p-3 rounded">
-              <strong>Kung nakatulong sa’yo ang calculator na ito, please support me para makagawa pa ako ng mga content na makakatulong sa 3D printing journey mo. Follow me on Youtube and Facebook.</strong>
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <a href={s.facebookUrl} target="_blank" rel="noreferrer" className="rounded-2xl border border-blue-600 bg-blue-600 text-white px-3 py-2 text-sm shadow-sm" title="Follow me on Facebook">Facebook</a>
-              <a href={s.youtubeUrl} target="_blank" rel="noreferrer" className="rounded-2xl border border-red-600 bg-red-600 text-white px-3 py-2 text-sm shadow-sm" title="Follow me on YouTube">YouTube</a>
+            {/* Social links moved here */}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <a href={s.facebookUrl} target="_blank" rel="noreferrer" className="rounded-2xl border px-3 py-2 text-sm shadow-sm" title="Follow me on Facebook for more 3D printing tips (I-follow ako sa Facebook para sa more 3D printing tips)">Facebook</a>
+              <a href={s.youtubeUrl} target="_blank" rel="noreferrer" className="rounded-2xl border px-3 py-2 text-sm shadow-sm" title="Follow me on YouTube for more 3D printing tips (Sundan ninyo ako sa YouTube para sa more 3D printing tips)">YouTube</a>
             </div>
           </section>
 
