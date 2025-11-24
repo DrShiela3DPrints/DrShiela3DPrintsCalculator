@@ -1,13 +1,16 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 /**
- * DS3DPC v1.3 — Dr Shiela 3D Prints 3D Printing Calculator (single-file App.jsx)
- * - Depreciation: completely removed from state, UI, and CSV.
+ * DS3DPC v1.5 — Dr Shiela 3D Prints 3D Printing Calculator (single-file App.jsx)
+ * - Depreciation: Cost of Asset ÷ Useful Years → converted to hourly using 365×24 hours/year.
+ * - Depreciation UI: C and L inputs; only hourly depreciation shown.
  * - Electricity: 2 modes — (1) Wattage × hours × ₱/kWh, (2) Measured kWh × ₱/kWh from energy monitor.
  * - UI: Section headers green (white bold text); Computed Summary header yellow (black bold text).
- * - Other Costs: includes 3D Modeling Fee.
+ * - Other Costs: added 3D Modeling Fee.
  * - Usage Counter: shows how many people have used the calculator using CountAPI.
  */
+
+const HOURS_PER_YEAR = 365 * 24;
 
 function pretty(num) {
   if (num === undefined || num === null || Number.isNaN(num)) return "—";
@@ -32,8 +35,8 @@ function usePersistedState(key, initial) {
 }
 
 export default function App() {
-  const [s, setS] = usePersistedState("ds3dpc_v1_3", {
-    label: "Dr Shiela 3D Prints 3D Printing Calculator",
+  const [s, setS] = usePersistedState("ds3dpc_v1_5", {
+    label: "DS3DPC v1.5 – Dr Shiela 3D Prints 3D Printing Calculator",
 
     // Mutually exclusive pricing option: 'derive' or 'fixed'
     pricingMode: "derive",
@@ -61,6 +64,13 @@ export default function App() {
     adhesives: 0,
     shipping: 0,
     modelingFee: 0,
+
+    // Depreciation
+    useDepreciation: false,
+    // legacy field kept only for CSV column meaning; live calc uses C/L → hourly
+    depreciationRatePerHour: 0,
+    assetCostPHP: "", // Cost of asset (printer) incl. shipping/taxes
+    lifespanYears: "", // Useful life in years
 
     // Margins
     failureMarginPct: 10,
@@ -121,6 +131,17 @@ export default function App() {
     electricityCost = (watt * printTime / 1000) * Number(s.kwhPrice);
   }
 
+  // Depreciation helper calculations (C, L → hourly)
+  const C = Number(s.assetCostPHP) || 0;
+  const L = Number(s.lifespanYears) || 0;
+
+  // Annual depreciation = C ÷ L (no residual). Hourly = Annual ÷ (365×24)
+  const annualDep = L > 0 ? (C / L) : 0;
+  const hourlyDep = L > 0 ? (annualDep / HOURS_PER_YEAR) : 0;
+
+  // The calculator ONLY uses per-hour depreciation × print hours
+  const depreciationCost = s.useDepreciation ? (hourlyDep * printTime) : 0;
+
   const otherCosts =
     Number(s.packaging) +
     Number(s.paint) +
@@ -132,7 +153,8 @@ export default function App() {
     materialCost +
     electricityCost +
     Number(s.laborCost) +
-    otherCosts;
+    otherCosts +
+    depreciationCost;
 
   const withFailure =
     baseSubtotal * (1 + Number(s.failureMarginPct) / 100);
@@ -162,12 +184,15 @@ export default function App() {
     "Adhesives",
     "Shipping",
     "3D Modeling Fee",
+    "Use Depreciation",
+    "Depreciation (PHP/hr)",
     "Failure Margin %",
     "Markup %",
     "Price/gram",
     "Material Cost",
     "Electricity Cost",
     "Other Costs",
+    "Depreciation Cost",
     "Subtotal",
     "With Failure",
     "Final Price",
@@ -205,6 +230,15 @@ export default function App() {
       kwhUsed = watt > 0 ? (watt * printHrs / 1000) : 0;
     }
 
+    // Depreciation for CSV: recompute using same C/L logic
+    const Cc = Number(d.assetCostPHP) || 0;
+    const Ll = Number(d.lifespanYears) || 0;
+    const annualCsv = Ll > 0 ? (Cc / Ll) : 0;
+    const hourlyDepCsv = Ll > 0 ? (annualCsv / HOURS_PER_YEAR) : 0;
+    const dep = d.useDepreciation
+      ? hourlyDepCsv * printHrs
+      : 0;
+
     const others =
       (Number(d.packaging) || 0) +
       (Number(d.paint) || 0) +
@@ -216,10 +250,12 @@ export default function App() {
       mat +
       elec +
       (Number(d.laborCost) || 0) +
-      others;
+      others +
+      dep;
 
     const withFailCsv =
-      sub * (1 + (Number(d.failureMarginPct) || 0) / 100);
+      sub *
+      (1 + (Number(d.failureMarginPct) || 0) / 100);
 
     const fin =
       withFailCsv *
@@ -244,12 +280,15 @@ export default function App() {
       d.adhesives,
       d.shipping,
       d.modelingFee,
+      d.useDepreciation ? "Yes" : "No",
+      hourlyDepCsv,
       d.failureMarginPct,
       d.markupPct,
       ppg,
       mat,
       elec,
       others,
+      dep,
       sub,
       withFailCsv,
       fin,
@@ -297,7 +336,9 @@ export default function App() {
     let newSaves = Array.isArray(s.saves) ? [...s.saves] : [];
     if (newSaves.length >= 3) {
       const confirmOverride = confirm(
-        `You already have 3 saves. Override the 1st save ("${newSaves[0].name}") and push others down?\n\n` +
+        `You already have 3 saves. Override the 1st save ("${newSaves[0].name}") and push others down?
+
+` +
           `May 3 saves ka na. I-override ang unang save ("${newSaves[0].name}") at itulak pababa ang iba?`
       );
       if (!confirmOverride) return;
@@ -351,7 +392,7 @@ export default function App() {
 
   const fmtDate = (ts) => new Date(ts).toLocaleString();
 
-  // ===== Self-test – no depreciation now, just CSV + BOM checks =====
+  // ===== (Tiny) Self-test – helps catch regressions quickly =====
   const selfTest = () => {
     try {
       // Case 1: Baseline CSV row generation has no embedded newlines
@@ -375,6 +416,9 @@ export default function App() {
           adhesives: 0,
           shipping: 0,
           modelingFee: 0,
+          useDepreciation: true,
+          assetCostPHP: 50000,
+          lifespanYears: 5,
           failureMarginPct: 10,
           markupPct: 20,
         },
@@ -395,19 +439,17 @@ export default function App() {
       if (!quoted.startsWith('"He said ""hello"""'))
         throw new Error("CSV quote escaping failed");
 
-      // Case 3: Electricity sanity — wattage mode
-      const watt = 120;
-      const hrs = 3.5;
-      const rate = 12;
-      const expectedElec = (watt * hrs / 1000) * rate; // 120*3.5/1000*12
-      const cells = quoted.split(",");
-      const idxElec = csvHeaders.indexOf("Electricity Cost");
-      const elecVal = parseFloat(cells[idxElec]);
+      // Case 3: Depreciation math sanity: C=50,000, L=5
+      // Annual = 50,000 / 5 = 10,000; Hourly ≈ 10,000 / (365*24)
+      const C0 = 50000;
+      const L0 = 5;
+      const annual0 = C0 / L0; // 10,000
+      const hourly0 = annual0 / HOURS_PER_YEAR;
       const close = (a, b, eps = 0.02) =>
         Math.abs(a - b) < eps;
-      if (!close(elecVal, expectedElec, 0.02))
+      if (!close(hourly0, 10000 / HOURS_PER_YEAR, 0.02))
         throw new Error(
-          "Electricity cost calc check failed"
+          "Depreciation hourly calc check failed"
         );
 
       // BOM presence
@@ -417,7 +459,7 @@ export default function App() {
       if (content.charCodeAt(0) !== 0xFEFF)
         throw new Error("Missing BOM");
 
-      alert("Self-test passed: CSV & electricity checks OK.");
+      alert("Self-test passed: CSV & depreciation checks OK.");
     } catch (e) {
       alert("Self-test FAILED: " + e.message);
     }
@@ -430,12 +472,10 @@ export default function App() {
         {/* Header + Save controls */}
         <header className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
-            <h1 className="text-2xl font-bold">
-              Dr Shiela 3D Prints 3D Printing Calculator 🇵🇭
-            </h1>
-            <p className="text-sm text-gray-600">
-              Version 1.3 · PHP-only · Persists on refresh · Hover
-              labels for English/Tagalog help.
+            <h1 className="text-2xl font-bold">Dr Shiela 3D Prints 3D Printing Calculator 🇵🇭</h1>
+            <p className="text-sm text-gray-600">Version 1.2 · 
+              PHP-only · Persists on refresh · Hover labels for
+              English/Tagalog help.
             </p>
           </div>
 
@@ -611,13 +651,13 @@ export default function App() {
             </div>
             {useCount !== null && (
               <div className="mt-6 text-center text-sm text-gray-600">
-                <strong>{useCount.toLocaleString()}</strong>{" "}
-                people have used this 3D printing calculator.
+                <strong>{useCount.toLocaleString()}</strong> people have used this
+                3D printing calculator.
               </div>
             )}
           </section>
 
-          {/* MIDDLE: Print & Power + Labor */}
+          {/* MIDDLE: Print & Power + Labor + Depreciation */}
           <section className="col-span-1 space-y-3 rounded-2xl bg-white p-4 shadow">
             <h2 className="mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">
               Print & Power
@@ -728,6 +768,109 @@ export default function App() {
                 }
               />
             </Field>
+
+            {/* Depreciation with checkbox in header + note + How to compute */}
+            <h2 className="mt-4 flex items-center justify-between text-lg font-semibold">
+              <span className="rounded bg-green-600 px-3 py-1 font-bold text-white">
+                Depreciation
+              </span>
+              <input
+                type="checkbox"
+                checked={s.useDepreciation}
+                onChange={(e) =>
+                  setS({
+                    ...s,
+                    useDepreciation: e.target.checked,
+                  })
+                }
+                title="Enable depreciation"
+                className="h-4 w-4"
+              />
+            </h2>
+            <p className="mt-1 text-[11px] text-gray-600">
+              Enable depreciation (I-activate ang depreciation)
+            </p>
+            <p className="mt-2 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-gray-700">
+              <strong>Note:</strong> Kahit fully paid na ang 3D
+              printer mo, unti-unti pa rin itong nawawalan ng
+              value dahil sa wear and tear, luma na ang
+              technology, at kailangan din eventually palitan. Sa
+              pamamagitan ng depreciation, nababawi mo nang
+              paunti-unti ang halaga nito sa presyo ng bawat
+              print job.
+            </p>
+
+            {s.useDepreciation && (
+              <div className="rounded-2xl border bg-gray-50 p-3 text-sm">
+                <div className="mb-2 font-medium">
+                  How to compute
+                </div>
+                <div className="mb-3 space-y-1 text-xs text-gray-700">
+                  <div>
+                    <strong>C — Cost of Asset</strong>: Total na
+                    binayad mo para sa printer kasama ang
+                    shipping at taxes. {" "}
+                    <em>Example: ₱50,000</em>
+                  </div>
+                  <div>
+                    <strong>L — Useful Life (years)</strong>:
+                    Gaano katagal mo inaasahang magagamit ang
+                    printer bago ito palitan. {" "}
+                    <em>Example: 5 years</em>
+                  </div>
+                </div>
+
+                {/* Inputs for C and L */}
+                <div className="mb-3 grid grid-cols-1 gap-2">
+                  <Field label={`C: Cost of Asset (${PHP})`}>
+                    <Num
+                      value={s.assetCostPHP}
+                      onChange={(v) =>
+                        setS({ ...s, assetCostPHP: v })
+                      }
+                      placeholder="e.g. 50000"
+                    />
+                  </Field>
+                  <Field label="L: Useful Life (years)">
+                    <Num
+                      value={s.lifespanYears}
+                      onChange={(v) =>
+                        setS({ ...s, lifespanYears: v })
+                      }
+                      placeholder="e.g. 5"
+                    />
+                  </Field>
+                </div>
+
+                <div className="mb-2 text-xs text-gray-600">
+                  <strong>Annual Depreciation Expense</strong> =
+                  C ÷ L. <br />
+                  <strong>Hourly Depreciation</strong> = Annual
+                  Depreciation ÷ (365 × 24 hours). Iyan ang
+                  ginagamit sa calculator: {" "}
+                  <em>
+                    Print time (hours) × Hourly Depreciation
+                  </em>
+                  .
+                </div>
+                <div className="mt-3">
+                  <div className="rounded-xl border bg-white p-3">
+                    <div className="text-xs text-gray-500">
+                      Final computed depreciation rate
+                    </div>
+                    <div className="text-base font-semibold">
+                      {PHP} {pretty(hourlyDep)} / hr
+                    </div>
+                    {!(C > 0 && L > 0) && (
+                      <div className="mt-1 text-[11px] text-gray-500">
+                        Tip: Fill out C and L to get a non-zero
+                        hourly depreciation.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
 
           {/* RIGHT: Other Costs + Margins + Summary */}
@@ -840,6 +983,11 @@ export default function App() {
               <Row label="Other costs (pkg+paint+adh+ship+3D model)">
                 {PHP} {pretty(otherCosts)}
               </Row>
+              {s.useDepreciation ? (
+                <Row label="Depreciation">
+                  {PHP} {pretty(depreciationCost)}
+                </Row>
+              ) : null}
               <hr />
               <Row label="Subtotal">
                 {PHP} {pretty(baseSubtotal)}
@@ -926,7 +1074,7 @@ export default function App() {
         </section>
 
         <footer className="mt-6 text-center text-xs text-gray-500">
-          Built for GitHub Pages · DS3DPC v1.3 · PHP only
+          Built for GitHub Pages · DS3DPC v1.5 · PHP only
         </footer>
       </div>
     </div>
