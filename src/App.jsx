@@ -1,12 +1,16 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 /**
- * DS3DPC v1.3 — Dr Shiela 3D Prints 3D Printing Calculator (single-file App.jsx)
+ * DS3DPC v1.4 — Dr Shiela 3D Prints 3D Printing Calculator (single-file App.jsx)
  * - Depreciation: completely removed from state, UI, and CSV.
- * - Electricity: 2 modes — (1) Wattage × hours × ₱/kWh, (2) Measured kWh × ₱/kWh from energy monitor.
+ * - Electricity: 2 modes — (1) Wattage × hours × ₱/kWh, (2) Average kWh/hour × hours × ₱/kWh from energy monitor.
+ * - Print time: accepts hours, minutes, seconds; uses decimal hours for all computations.
  * - UI: Section headers green (white bold text); Computed Summary header yellow (black bold text).
  * - Other Costs: includes 3D Modeling Fee.
  * - Usage Counter: shows how many people have used the calculator using CountAPI.
+ * - Failure margin: applies only on production costs (material + electricity + labor + packaging + paint + adhesives).
+ * - Markup: applies only on subtotal (production + 3D modeling fee + shipping).
+ * - Final price: subtotal + failure margin + markup.
  */
 
 function pretty(num) {
@@ -32,7 +36,7 @@ function usePersistedState(key, initial) {
 }
 
 export default function App() {
-  const [s, setS] = usePersistedState("ds3dpc_v1_3", {
+  const [s, setS] = usePersistedState("ds3dpc_v1_4", {
     label: "Dr Shiela 3D Prints 3D Printing Calculator",
 
     // Mutually exclusive pricing option: 'derive' or 'fixed'
@@ -46,10 +50,12 @@ export default function App() {
 
     // Print & power
     printTimeHours: 6,
+    printTimeMinutes: 0,
+    printTimeSeconds: 0,
     // Electricity mode: 'wattage' or 'kwh'
     electricityMode: "wattage",
     wattage: 120, // W
-    energyUsedKwh: "", // kWh from monitoring device
+    energyUsedKwh: "", // average kWh per hour from monitoring device
     kwhPrice: 12, // PHP/kWh
 
     // Labor (flat)
@@ -108,36 +114,57 @@ export default function App() {
   const weight_g = Number(s.partWeight) > 0 ? Number(s.partWeight) : 0;
   const materialCost = weight_g * pricePerGram;
 
-  const printTime = Number(s.printTimeHours) || 0;
+  // Print time: convert hours + minutes + seconds → decimal hours
+  const hours = Number(s.printTimeHours) || 0;
+  const minutes = Number(s.printTimeMinutes) || 0;
+  const seconds = Number(s.printTimeSeconds) || 0;
+  const printTimeHoursTotal = hours + minutes / 60 + seconds / 3600;
 
   // Electricity cost — 2 modes
   const modeElec = s.electricityMode || "wattage";
   let electricityCost = 0;
   if (modeElec === "kwh") {
-    const kwhUsed = Number(s.energyUsedKwh) || 0;
-    electricityCost = kwhUsed * Number(s.kwhPrice);
+    // energyUsedKwh = average kWh per hour; multiply by total hours
+    const avgKwhPerHour = Number(s.energyUsedKwh) || 0;
+    electricityCost = avgKwhPerHour * printTimeHoursTotal * Number(s.kwhPrice);
   } else {
     const watt = Number(s.wattage) || 0;
-    electricityCost = (watt * printTime / 1000) * Number(s.kwhPrice);
+    electricityCost = (watt * printTimeHoursTotal / 1000) * Number(s.kwhPrice);
   }
 
-  const otherCosts =
-    Number(s.packaging) +
-    Number(s.paint) +
-    Number(s.adhesives) +
-    Number(s.shipping) +
-    Number(s.modelingFee);
+  // Break down costs
+  const packagingCost = Number(s.packaging) || 0;
+  const paintCost = Number(s.paint) || 0;
+  const adhesivesCost = Number(s.adhesives) || 0;
+  const shippingCost = Number(s.shipping) || 0;
+  const modelingFeeCost = Number(s.modelingFee) || 0;
+  const laborCostNum = Number(s.laborCost) || 0;
 
-  const baseSubtotal =
+  // 1) Production costs (subject to failure margin)
+  const productionCost =
     materialCost +
     electricityCost +
-    Number(s.laborCost) +
-    otherCosts;
+    laborCostNum +
+    packagingCost +
+    paintCost +
+    adhesivesCost;
 
-  const withFailure =
-    baseSubtotal * (1 + Number(s.failureMarginPct) / 100);
-  const finalPrice =
-    withFailure * (1 + Number(s.markupPct) / 100);
+  // 2) Non-production costs (NO failure margin)
+  const nonProductionCost = modelingFeeCost + shippingCost;
+
+  // 3) Subtotal = production + non-production
+  const baseSubtotal = productionCost + nonProductionCost;
+
+  // 4) Failure margin ONLY on production costs
+  const failureMarginRate = Number(s.failureMarginPct) || 0;
+  const failureMarginAmount = productionCost * (failureMarginRate / 100);
+
+  // 5) Markup ONLY on subtotal
+  const markupRate = Number(s.markupPct) || 0;
+  const markupAmount = baseSubtotal * (markupRate / 100);
+
+  // 6) Final price = subtotal + failure margin + markup
+  const finalPrice = baseSubtotal + failureMarginAmount + markupAmount;
 
   const setMode = (mode) => setS({ ...s, pricingMode: mode });
   const setElecMode = (mode) => setS({ ...s, electricityMode: mode });
@@ -154,7 +181,7 @@ export default function App() {
     "Print Time (hrs)",
     "Electricity Mode",
     "Wattage (W)",
-    "Energy Used (kWh)",
+    "Energy Used (kWh per hr)",
     "kWh Price",
     "Labor Cost",
     "Packaging",
@@ -167,9 +194,11 @@ export default function App() {
     "Price/gram",
     "Material Cost",
     "Electricity Cost",
-    "Other Costs",
+    "Other Costs (pkg+paint+adh+ship+3D)",
+    "Production Cost",
+    "Non-Production Cost",
     "Subtotal",
-    "With Failure",
+    "With Failure (Subtotal + Failure)",
     "Final Price",
   ];
 
@@ -191,39 +220,59 @@ export default function App() {
     const weight = Number(d.partWeight) || 0;
     const mat = weight * ppg;
 
-    const printHrs = Number(d.printTimeHours) || 0;
+    // Print time from hours + minutes + seconds
+    const hCsv = Number(d.printTimeHours) || 0;
+    const mCsv = Number(d.printTimeMinutes) || 0;
+    const sCsv = Number(d.printTimeSeconds) || 0;
+    const printHrs = hCsv + mCsv / 60 + sCsv / 3600;
 
     const elecMode = d.electricityMode || "wattage";
     let elec = 0;
-    let kwhUsed = 0;
+    let kwhUsedPerHour = 0;
     if (elecMode === "kwh") {
-      kwhUsed = Number(d.energyUsedKwh) || 0;
-      elec = kwhUsed * (Number(d.kwhPrice) || 0);
+      // average kWh per hour
+      kwhUsedPerHour = Number(d.energyUsedKwh) || 0;
+      elec = kwhUsedPerHour * printHrs * (Number(d.kwhPrice) || 0);
     } else {
       const watt = Number(d.wattage) || 0;
       elec = (watt * printHrs / 1000) * (Number(d.kwhPrice) || 0);
-      kwhUsed = watt > 0 ? (watt * printHrs / 1000) : 0;
+      // derive an equivalent average kWh per hour for reference
+      kwhUsedPerHour = watt > 0 ? (watt / 1000) : 0;
     }
 
-    const others =
-      (Number(d.packaging) || 0) +
-      (Number(d.paint) || 0) +
-      (Number(d.adhesives) || 0) +
-      (Number(d.shipping) || 0) +
-      (Number(d.modelingFee) || 0);
+    const pkgCsv = Number(d.packaging) || 0;
+    const paintCsv = Number(d.paint) || 0;
+    const adhCsv = Number(d.adhesives) || 0;
+    const shipCsv = Number(d.shipping) || 0;
+    const modelCsv = Number(d.modelingFee) || 0;
+    const laborCsv = Number(d.laborCost) || 0;
 
-    const sub =
-      mat +
-      elec +
-      (Number(d.laborCost) || 0) +
-      others;
+    // Production = material + electricity + labor + pkg + paint + adh
+    const productionCsv =
+      mat + elec + laborCsv + pkgCsv + paintCsv + adhCsv;
 
-    const withFailCsv =
-      sub * (1 + (Number(d.failureMarginPct) || 0) / 100);
+    // Non-production = modeling + shipping
+    const nonProductionCsv = modelCsv + shipCsv;
 
-    const fin =
-      withFailCsv *
-      (1 + (Number(d.markupPct) || 0) / 100);
+    // Subtotal
+    const sub = productionCsv + nonProductionCsv;
+
+    // Failure margin only on production
+    const fmRateCsv = Number(d.failureMarginPct) || 0;
+    const failureAmountCsv = productionCsv * (fmRateCsv / 100);
+
+    // Markup only on subtotal
+    const muRateCsv = Number(d.markupPct) || 0;
+    const markupAmountCsv = sub * (muRateCsv / 100);
+
+    // For CSV columns:
+    // "With Failure" = Subtotal + failure margin
+    const withFailCsv = sub + failureAmountCsv;
+
+    // "Final Price" = Subtotal + failure + markup
+    const fin = sub + failureAmountCsv + markupAmountCsv;
+
+    const others = pkgCsv + paintCsv + adhCsv + shipCsv + modelCsv;
 
     const cells = [
       entry.name,
@@ -233,10 +282,10 @@ export default function App() {
       d.spoolWeight,
       d.fixedPerGram,
       d.partWeight,
-      d.printTimeHours,
+      printHrs,
       elecMode,
       d.wattage,
-      kwhUsed,
+      kwhUsedPerHour,
       d.kwhPrice,
       d.laborCost,
       d.packaging,
@@ -250,6 +299,8 @@ export default function App() {
       mat,
       elec,
       others,
+      productionCsv,
+      nonProductionCsv,
       sub,
       withFailCsv,
       fin,
@@ -351,7 +402,7 @@ export default function App() {
 
   const fmtDate = (ts) => new Date(ts).toLocaleString();
 
-  // ===== Self-test – no depreciation now, just CSV + BOM checks =====
+  // ===== Self-test – CSV & electricity checks =====
   const selfTest = () => {
     try {
       // Case 1: Baseline CSV row generation has no embedded newlines
@@ -365,6 +416,8 @@ export default function App() {
           fixedPerGram: 2,
           partWeight: 12.5,
           printTimeHours: 3.5,
+          printTimeMinutes: 0,
+          printTimeSeconds: 0,
           electricityMode: "wattage",
           energyUsedKwh: "",
           wattage: 120,
@@ -434,7 +487,7 @@ export default function App() {
               Dr Shiela 3D Prints 3D Printing Calculator 🇵🇭
             </h1>
             <p className="text-sm text-gray-600">
-              Version 1.3 · PHP-only · Persists on refresh · Hover
+              Version 1.4 · PHP-only · Persists on refresh · Hover
               labels for English/Tagalog help.
             </p>
           </div>
@@ -625,15 +678,35 @@ export default function App() {
 
             {/* Print time */}
             <Field
-              label="Print time (hours)"
+              label="Print time"
               hint="Total printing duration (Kabuuang oras ng pagpi-print. Makikita rin sa slicer)."
             >
-              <Num
-                value={s.printTimeHours}
-                onChange={(v) =>
-                  setS({ ...s, printTimeHours: v })
-                }
-              />
+              <div className="grid grid-cols-3 gap-2">
+                <Num
+                  value={s.printTimeHours}
+                  onChange={(v) =>
+                    setS({ ...s, printTimeHours: v })
+                  }
+                  placeholder="Hours"
+                />
+                <Num
+                  value={s.printTimeMinutes}
+                  onChange={(v) =>
+                    setS({ ...s, printTimeMinutes: v })
+                  }
+                  placeholder="Minutes"
+                />
+                <Num
+                  value={s.printTimeSeconds}
+                  onChange={(v) =>
+                    setS({ ...s, printTimeSeconds: v })
+                  }
+                  placeholder="Seconds"
+                />
+              </div>
+              <div className="mt-1 text-xs text-gray-500">
+                Decimal hours used for computation: {pretty(printTimeHoursTotal)} h
+              </div>
             </Field>
 
             {/* Electricity price */}
@@ -686,10 +759,10 @@ export default function App() {
               — or —
             </div>
 
-            {/* Mode 2: Measured kWh */}
+            {/* Mode 2: Measured kWh per hour */}
             <div
               className="flex items-center gap-2"
-              title="Compute using measured kWh from a monitoring device (Gamit ang aktwal na kWh reading mula sa power meter)."
+              title="Compute using average kWh per hour from a monitoring device (Gamit ang average kWh/hr reading mula sa power meter)."
             >
               <input
                 type="checkbox"
@@ -697,13 +770,13 @@ export default function App() {
                 onChange={() => setElecMode("kwh")}
               />
               <span className="text-sm font-medium">
-                Use measured energy (kWh) from monitoring device
+                Use average energy (kWh/hr) from monitoring device
               </span>
             </div>
             {modeElec === "kwh" && (
               <Field
-                label="Energy used (kWh)"
-                hint="Actual kWh reading from power monitor (Aktwal na kWh reading mula sa monitoring device)."
+                label="Average energy used (kWh per hour)"
+                hint="Average kWh per hour from power monitor, multiplied by total print hours (Average kWh kada oras mula sa monitoring device)."
               >
                 <Num
                   value={s.energyUsedKwh}
@@ -835,32 +908,54 @@ export default function App() {
                 {PHP} {pretty(electricityCost)}
               </Row>
               <Row label="Labor cost">
-                {PHP} {pretty(Number(s.laborCost))}
+                {PHP} {pretty(laborCostNum)}
               </Row>
-              <Row label="Other costs (pkg+paint+adh+ship+3D model)">
-                {PHP} {pretty(otherCosts)}
+              <Row label="Packaging">
+                {PHP} {pretty(packagingCost)}
               </Row>
+              <Row label="Paint">
+                {PHP} {pretty(paintCost)}
+              </Row>
+              <Row label="Adhesives">
+                {PHP} {pretty(adhesivesCost)}
+              </Row>
+
               <hr />
+
+              <Row label="3D modeling fee">
+                {PHP} {pretty(modelingFeeCost)}
+              </Row>
+
+              <hr />
+
+              <Row label="Shipping fee">
+                {PHP} {pretty(shippingCost)}
+              </Row>
+
+              <hr />
+
               <Row label="Subtotal">
                 {PHP} {pretty(baseSubtotal)}
               </Row>
               <Row
                 label={
-                  "+ Failure margin (" +
+                  "Failure margin (" +
                   s.failureMarginPct +
                   "%)"
                 }
               >
-                {PHP} {pretty(withFailure)}
+                {PHP} {pretty(failureMarginAmount)}
               </Row>
               <Row
                 label={
-                  "Final price (+ markup " +
+                  "Mark Up (" +
                   s.markupPct +
-                  "%)"
+                  "% of subtotal)"
                 }
-                strong
               >
+                {PHP} {pretty(markupAmount)}
+              </Row>
+              <Row label="Final Price" strong>
                 {PHP} {pretty(finalPrice)}
               </Row>
             </div>
@@ -926,7 +1021,7 @@ export default function App() {
         </section>
 
         <footer className="mt-6 text-center text-xs text-gray-500">
-          Built for GitHub Pages · DS3DP v1.3 · PHP only
+          Built for GitHub Pages · DS3DP v1.4 · PHP only
         </footer>
       </div>
     </div>
