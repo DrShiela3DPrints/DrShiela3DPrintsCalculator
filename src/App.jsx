@@ -1,17 +1,46 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/**
- * DS3DPC v1.4 — Dr Shiela 3D Prints 3D Printing Calculator (single-file App.jsx)
- * - Depreciation: completely removed from state, UI, and CSV.
- * - Electricity: 2 modes — (1) Wattage × hours × ₱/kWh, (2) Average kWh/hour × hours × ₱/kWh from energy monitor.
- * - Print time: accepts hours, minutes, seconds; uses decimal hours for all computations.
- * - UI: Section headers green (white bold text); Computed Summary header yellow (black bold text).
- * - Other Costs: includes 3D Modeling Fee.
- * - Usage Counter: shows how many people have used the calculator using CountAPI.
- * - Failure margin: applies only on production costs (material + electricity + labor + packaging + paint + adhesives).
- * - Markup: applies only on subtotal (production + 3D modeling fee + shipping).
- * - Final price: subtotal + failure margin + markup.
- */
+function normalizeUrl(url) {
+  const u = String(url || "").trim();
+  if (!u) return "";
+  if (/^https?:\/\//i.test(u)) return u;
+  return "https://" + u.replace(/^\/+/, "");
+}
+
+// Opens an external link in a new tab/window as reliably as possible.
+// NOTE: For best popup-blocker behavior, call this directly inside a click handler.
+function openExternal(rawUrl) {
+  const u = normalizeUrl(rawUrl);
+  if (!u) return;
+
+  // 1) Try window.open first (often the most "user-gesture" friendly).
+  try {
+    const w = window.open(u, "_blank", "noopener,noreferrer");
+    if (w) {
+      try {
+        w.opener = null;
+      } catch {}
+      return;
+    }
+  } catch {}
+
+  // 2) Fallback: synthetic anchor click
+  try {
+    const a = document.createElement("a");
+    a.href = u;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.referrerPolicy = "no-referrer";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    return;
+  } catch {}
+
+  // 3) Last resort: same-tab navigation
+  window.location.href = u;
+}
 
 function pretty(num) {
   if (num === undefined || num === null || Number.isNaN(num)) return "—";
@@ -27,83 +56,183 @@ function usePersistedState(key, initial) {
       return initial;
     }
   });
+
   useEffect(() => {
     try {
       localStorage.setItem(key, JSON.stringify(state));
     } catch {}
   }, [key, state]);
+
   return [state, setState];
 }
 
+const KW_PRESETS = [
+  { key: "creality_hi", label: "Creality Hi PLA — 0.129 kW", kw: 0.129 },
+  { key: "creality_k2pro", label: "Creality K2 Pro PLA — 0.183 kW", kw: 0.183 },
+  { key: "bambu_a1mini", label: "Bambu Lab A1 Mini PLA — ~0.77 kW", kw: 0.77 },
+  { key: "bambu_a1", label: "Bambu Lab A1 PLA — ~0.93 kW", kw: 0.93 },
+  { key: "bambu_p1s", label: "Bambu Lab P1S PLA — 0.10 kW", kw: 0.1 },
+  { key: "bambu_h2s", label: "Bambu Lab H2S PLA — 0.175 kW", kw: 0.175 },
+  { key: "bambu_h2c", label: "Bambu Lab H2C PLA — 0.128 kW", kw: 0.128 },
+  { key: "other", label: "Other (Custom kW)", kw: null },
+];
+
+const HELP_KW_HINT =
+  "Pumili ng printer model sa listahan. Lahat ng nasa listahan ay based sa readings ng aking monitoring device at approximate lang. Kung wala ang printer mo sa list, piliin ang Other at maglagay ng sarili mong kW value.";
+
+const STORAGE_KEY = "ds3dpc_v1_5";
+const WIPE_ONCE_KEY = "ds3dpc_v1_5_wiped_once";
+
+const INITIAL_STATE = {
+  label: "Dr Shiela 3D Prints 3D Printing Calculator",
+
+  pricingMode: "derive",
+  spoolPrice: 800,
+  spoolWeight: 1000,
+  fixedPerGram: 2.0,
+
+  partWeight: "",
+
+  printTimeHours: 6,
+  printTimeMinutes: 0,
+  printTimeSeconds: 0,
+
+  electricityMode: "wattage",
+
+  wattage: 120,
+
+  kwPreset: "creality_hi",
+  kwCustom: "",
+
+  kwhPrice: 12,
+
+  electricityPhpPerHour: 5,
+
+  laborCost: 0,
+
+  packaging: 0,
+  paint: 0,
+  adhesives: 0,
+  shipping: 0,
+  modelingFee: 0,
+
+  failureMarginPct: 10,
+  markupPct: 20,
+
+  facebookUrl: "https://www.facebook.com/drshiela3dprintspage",
+  youtubeUrl: "https://www.youtube.com/@DrShiela3DPrints",
+  tiktokUrl: "https://www.tiktok.com/@drshiela3dprints",
+  instagramUrl: "https://www.instagram.com/drshiela3dprints",
+  tapoUrl: "https://s.shopee.ph/AABsL1KL7t",
+
+  saves: [],
+  productName: "",
+};
+
+async function fetchCountApiValue(url, timeoutMs = 4000) {
+  if (typeof fetch !== "function") return null;
+
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
+
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller ? controller.signal : undefined,
+    });
+
+    if (!res || !res.ok) return null;
+
+    const text = await res.text();
+    if (!text) return null;
+
+    try {
+      const data = JSON.parse(text);
+      return typeof data.value === "number" ? data.value : null;
+    } catch {
+      return null;
+    }
+  } catch {
+    return null;
+  } finally {
+    if (timer) window.clearTimeout(timer);
+  }
+}
+
+function ExternalLink({ href, className, title, children }) {
+  const safeHref = normalizeUrl(href);
+  return (
+    <a
+      href={safeHref}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => {
+        // Force the open to happen from the direct user click.
+        e.preventDefault();
+        openExternal(href);
+      }}
+      className={className}
+      title={title}
+    >
+      {children}
+    </a>
+  );
+}
+
 export default function App() {
-  const [s, setS] = usePersistedState("ds3dpc_v1_4", {
-    label: "Dr Shiela 3D Prints 3D Printing Calculator",
+  const [s, setS] = usePersistedState(STORAGE_KEY, INITIAL_STATE);
 
-    // Mutually exclusive pricing option: 'derive' or 'fixed'
-    pricingMode: "derive",
-    spoolPrice: 800, // PHP
-    spoolWeight: 1000, // g
-    fixedPerGram: 2.0, // PHP/g
+  // v1.5 hard reset (wipe old saved state) — runs once per browser/device.
+  useEffect(() => {
+    try {
+      const already = localStorage.getItem(WIPE_ONCE_KEY);
+      if (already === "1") return;
 
-    // Usage (shown as Filament consumed)
-    partWeight: "", // g
+      // Wipe both old and new keys so social links + fields reset to v1.5 defaults.
+      localStorage.removeItem("ds3dpc_v1_4");
+      localStorage.removeItem("ds3dpc_v1_5");
+      localStorage.setItem(WIPE_ONCE_KEY, "1");
 
-    // Print & power
-    printTimeHours: 6,
-    printTimeMinutes: 0,
-    printTimeSeconds: 0,
-    // Electricity mode: 'wattage' or 'kwh'
-    electricityMode: "wattage",
-    wattage: 120, // W
-    energyUsedKwh: "", // average kWh per hour from monitoring device
-    kwhPrice: 12, // PHP/kWh
+      // Force React state to v1.5 defaults.
+      setS(INITIAL_STATE);
+    } catch {
+      // If storage is blocked, we just continue.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    // Labor (flat)
-    laborCost: 0,
-
-    // Other costs
-    packaging: 0,
-    paint: 0,
-    adhesives: 0,
-    shipping: 0,
-    modelingFee: 0,
-
-    // Margins
-    failureMarginPct: 10,
-    markupPct: 20,
-
-    // Links
-    facebookUrl: "https://www.facebook.com/drshiela3dprints/",
-    youtubeUrl: "https://www.youtube.com/@DrShiela3DPrints",
-
-    // Saves (up to 3)
-    saves: [], // [{ name, ts, data }]
-    productName: "",
-  });
-
-  // Global usage counter (CountAPI)
   const [useCount, setUseCount] = useState(null);
+  const counterWarnedRef = useRef(false);
 
   useEffect(() => {
-    async function fetchCount() {
-      try {
-        const res = await fetch(
-          "https://api.countapi.xyz/hit/drshiela3dprints/ds3dpc-v1"
-        );
-        const data = await res.json();
-        if (typeof data.value === "number") {
-          setUseCount(data.value);
+    let mounted = true;
+
+    (async () => {
+      const value = await fetchCountApiValue(
+        "https://api.countapi.xyz/hit/drshiela3dprints/ds3dpc-v1-5",
+        4000
+      );
+      if (!mounted) return;
+
+      if (typeof value === "number") {
+        setUseCount(value);
+      } else {
+        if (!counterWarnedRef.current) {
+          counterWarnedRef.current = true;
+          console.warn("CountAPI unavailable (ignored). The calculator will continue to work.");
         }
-      } catch (e) {
-        console.error("Counter failed:", e);
+        setUseCount(null);
       }
-    }
-    fetchCount();
+    })();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const PHP = "₱";
 
-  // Derived price per gram
   const pricePerGram = useMemo(() => {
     if (s.pricingMode === "fixed") return Number(s.fixedPerGram) || 0;
     const p = Number(s.spoolPrice);
@@ -114,25 +243,26 @@ export default function App() {
   const weight_g = Number(s.partWeight) > 0 ? Number(s.partWeight) : 0;
   const materialCost = weight_g * pricePerGram;
 
-  // Print time: convert hours + minutes + seconds → decimal hours
-  const hours = Number(s.printTimeHours) || 0;
-  const minutes = Number(s.printTimeMinutes) || 0;
-  const seconds = Number(s.printTimeSeconds) || 0;
-  const printTimeHoursTotal = hours + minutes / 60 + seconds / 3600;
+  const h = Number(s.printTimeHours) || 0;
+  const m = Number(s.printTimeMinutes) || 0;
+  const sec = Number(s.printTimeSeconds) || 0;
+  const printTimeHoursTotal = h + m / 60 + sec / 3600;
 
-  // Electricity cost — 2 modes
+  const kwPresetObj = KW_PRESETS.find((p) => p.key === String(s.kwPreset)) || KW_PRESETS[0];
+  const avgKw =
+    kwPresetObj.key === "other" ? Number(s.kwCustom) || 0 : Number(kwPresetObj.kw) || 0;
+
   const modeElec = s.electricityMode || "wattage";
   let electricityCost = 0;
-  if (modeElec === "kwh") {
-    // energyUsedKwh = average kWh per hour; multiply by total hours
-    const avgKwhPerHour = Number(s.energyUsedKwh) || 0;
-    electricityCost = avgKwhPerHour * printTimeHoursTotal * Number(s.kwhPrice);
+  if (modeElec === "kw") {
+    electricityCost = avgKw * printTimeHoursTotal * (Number(s.kwhPrice) || 0);
+  } else if (modeElec === "php_per_hour") {
+    electricityCost = (Number(s.electricityPhpPerHour) || 0) * printTimeHoursTotal;
   } else {
     const watt = Number(s.wattage) || 0;
-    electricityCost = (watt * printTimeHoursTotal / 1000) * Number(s.kwhPrice);
+    electricityCost = (watt * printTimeHoursTotal / 1000) * (Number(s.kwhPrice) || 0);
   }
 
-  // Break down costs
   const packagingCost = Number(s.packaging) || 0;
   const paintCost = Number(s.paint) || 0;
   const adhesivesCost = Number(s.adhesives) || 0;
@@ -140,36 +270,36 @@ export default function App() {
   const modelingFeeCost = Number(s.modelingFee) || 0;
   const laborCostNum = Number(s.laborCost) || 0;
 
-  // 1) Production costs (subject to failure margin)
   const productionCost =
-    materialCost +
-    electricityCost +
-    laborCostNum +
-    packagingCost +
-    paintCost +
-    adhesivesCost;
+    materialCost + electricityCost + laborCostNum + packagingCost + paintCost + adhesivesCost;
 
-  // 2) Non-production costs (NO failure margin)
   const nonProductionCost = modelingFeeCost + shippingCost;
-
-  // 3) Subtotal = production + non-production
   const baseSubtotal = productionCost + nonProductionCost;
 
-  // 4) Failure margin ONLY on production costs
   const failureMarginRate = Number(s.failureMarginPct) || 0;
   const failureMarginAmount = productionCost * (failureMarginRate / 100);
 
-  // 5) Markup ONLY on subtotal
   const markupRate = Number(s.markupPct) || 0;
   const markupAmount = baseSubtotal * (markupRate / 100);
 
-  // 6) Final price = subtotal + failure margin + markup
   const finalPrice = baseSubtotal + failureMarginAmount + markupAmount;
+
+  const resetEverything = () => {
+    const ok = confirm(
+      "Reset EVERYTHING (all fields + saves)?\n\nIre-reset lahat (fields + saves). Tuloy?"
+    );
+    if (!ok) return;
+    try {
+      // Clear both old and new storage keys to truly reset
+      localStorage.removeItem("ds3dpc_v1_4");
+      localStorage.removeItem("ds3dpc_v1_5");
+    } catch {}
+    setS(INITIAL_STATE);
+  };
 
   const setMode = (mode) => setS({ ...s, pricingMode: mode });
   const setElecMode = (mode) => setS({ ...s, electricityMode: mode });
 
-  // ===== CSV helpers =====
   const csvHeaders = [
     "Name",
     "Saved At",
@@ -181,8 +311,9 @@ export default function App() {
     "Print Time (hrs)",
     "Electricity Mode",
     "Wattage (W)",
-    "Energy Used (kWh per hr)",
+    "Average Power (kW)",
     "kWh Price",
+    "Electricity ₱/hr",
     "Labor Cost",
     "Packaging",
     "Paint",
@@ -204,8 +335,7 @@ export default function App() {
 
   const csvEscape = (val) => {
     const str = String(val ?? "");
-    const esc = str.replace(/"/g, '""');
-    return '"' + esc + '"';
+    return '"' + str.replace(/"/g, '""') + '"';
   };
 
   const toCsvRow = (entry) => {
@@ -214,172 +344,154 @@ export default function App() {
     const ppg =
       d.pricingMode === "fixed"
         ? Number(d.fixedPerGram) || 0
-        : (Number(d.spoolPrice) || 0) /
-          ((Number(d.spoolWeight) || 0) || 1);
+        : (Number(d.spoolPrice) || 0) / ((Number(d.spoolWeight) || 0) || 1);
 
     const weight = Number(d.partWeight) || 0;
     const mat = weight * ppg;
 
-    // Print time from hours + minutes + seconds
-    const hCsv = Number(d.printTimeHours) || 0;
-    const mCsv = Number(d.printTimeMinutes) || 0;
-    const sCsv = Number(d.printTimeSeconds) || 0;
-    const printHrs = hCsv + mCsv / 60 + sCsv / 3600;
+    const hh = Number(d.printTimeHours) || 0;
+    const mm = Number(d.printTimeMinutes) || 0;
+    const ss = Number(d.printTimeSeconds) || 0;
+    const printHrs = hh + mm / 60 + ss / 3600;
 
     const elecMode = d.electricityMode || "wattage";
+
+    const presetKey = String(d.kwPreset ?? "");
+    const presetObj = KW_PRESETS.find((p) => p.key === presetKey) || KW_PRESETS[0];
+    const avgKwCsv =
+      presetObj.key === "other" ? Number(d.kwCustom) || 0 : Number(presetObj.kw) || 0;
+
     let elec = 0;
-    let kwhUsedPerHour = 0;
-    if (elecMode === "kwh") {
-      // average kWh per hour
-      kwhUsedPerHour = Number(d.energyUsedKwh) || 0;
-      elec = kwhUsedPerHour * printHrs * (Number(d.kwhPrice) || 0);
+    let wattForCsv = "";
+    let phpPerHourCsv = "";
+
+    if (elecMode === "kw") {
+      elec = avgKwCsv * printHrs * (Number(d.kwhPrice) || 0);
+    } else if (elecMode === "php_per_hour") {
+      phpPerHourCsv = Number(d.electricityPhpPerHour) || 0;
+      elec = (Number(d.electricityPhpPerHour) || 0) * printHrs;
     } else {
       const watt = Number(d.wattage) || 0;
+      wattForCsv = watt;
       elec = (watt * printHrs / 1000) * (Number(d.kwhPrice) || 0);
-      // derive an equivalent average kWh per hour for reference
-      kwhUsedPerHour = watt > 0 ? (watt / 1000) : 0;
     }
 
-    const pkgCsv = Number(d.packaging) || 0;
-    const paintCsv = Number(d.paint) || 0;
-    const adhCsv = Number(d.adhesives) || 0;
-    const shipCsv = Number(d.shipping) || 0;
-    const modelCsv = Number(d.modelingFee) || 0;
-    const laborCsv = Number(d.laborCost) || 0;
+    const pkg = Number(d.packaging) || 0;
+    const paint = Number(d.paint) || 0;
+    const adh = Number(d.adhesives) || 0;
+    const ship = Number(d.shipping) || 0;
+    const model = Number(d.modelingFee) || 0;
+    const labor = Number(d.laborCost) || 0;
 
-    // Production = material + electricity + labor + pkg + paint + adh
-    const productionCsv =
-      mat + elec + laborCsv + pkgCsv + paintCsv + adhCsv;
+    const production = mat + elec + labor + pkg + paint + adh;
+    const nonProduction = model + ship;
+    const sub = production + nonProduction;
 
-    // Non-production = modeling + shipping
-    const nonProductionCsv = modelCsv + shipCsv;
+    const fmRate = Number(d.failureMarginPct) || 0;
+    const fmAmt = production * (fmRate / 100);
 
-    // Subtotal
-    const sub = productionCsv + nonProductionCsv;
+    const muRate = Number(d.markupPct) || 0;
+    const muAmt = sub * (muRate / 100);
 
-    // Failure margin only on production
-    const fmRateCsv = Number(d.failureMarginPct) || 0;
-    const failureAmountCsv = productionCsv * (fmRateCsv / 100);
+    const withFail = sub + fmAmt;
+    const fin = sub + fmAmt + muAmt;
 
-    // Markup only on subtotal
-    const muRateCsv = Number(d.markupPct) || 0;
-    const markupAmountCsv = sub * (muRateCsv / 100);
-
-    // For CSV columns:
-    // "With Failure" = Subtotal + failure margin
-    const withFailCsv = sub + failureAmountCsv;
-
-    // "Final Price" = Subtotal + failure + markup
-    const fin = sub + failureAmountCsv + markupAmountCsv;
-
-    const others = pkgCsv + paintCsv + adhCsv + shipCsv + modelCsv;
+    const others = pkg + paint + adh + ship + model;
 
     const cells = [
       entry.name,
       new Date(entry.ts).toLocaleString(),
       d.pricingMode,
-      d.spoolPrice,
-      d.spoolWeight,
-      d.fixedPerGram,
-      d.partWeight,
+      Number(d.spoolPrice) || 0,
+      Number(d.spoolWeight) || 0,
+      Number(d.fixedPerGram) || 0,
+      Number(d.partWeight) || 0,
       printHrs,
       elecMode,
-      d.wattage,
-      kwhUsedPerHour,
-      d.kwhPrice,
-      d.laborCost,
-      d.packaging,
-      d.paint,
-      d.adhesives,
-      d.shipping,
-      d.modelingFee,
-      d.failureMarginPct,
-      d.markupPct,
+      wattForCsv === "" ? "" : wattForCsv,
+      avgKwCsv,
+      Number(d.kwhPrice) || 0,
+      phpPerHourCsv === "" ? "" : phpPerHourCsv,
+      Number(d.laborCost) || 0,
+      pkg,
+      paint,
+      adh,
+      ship,
+      model,
+      Number(d.failureMarginPct) || 0,
+      Number(d.markupPct) || 0,
       ppg,
       mat,
       elec,
       others,
-      productionCsv,
-      nonProductionCsv,
+      production,
+      nonProduction,
       sub,
-      withFailCsv,
+      withFail,
       fin,
     ];
 
-    return cells
-      .map((v) => (typeof v === "string" ? csvEscape(v) : v))
-      .join(",");
+    return cells.map((v) => (typeof v === "string" ? csvEscape(v) : v)).join(",");
   };
 
-  const BOM = String.fromCharCode(0xFEFF);
+  const BOM = String.fromCharCode(0xfeff);
 
   const downloadCSV = (rows, filename) => {
-    const content =
-      BOM + csvHeaders.join(",") + "\n" + rows.join("\n");
-    const blob = new Blob([content], {
-      type: "text/csv;charset=utf-8;",
-    });
+    const content = BOM + csvHeaders.join(",") + "\n" + rows.join("\n");
+    const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = filename.endsWith(".csv")
-      ? filename
-      : filename + ".csv";
+    a.download = filename.endsWith(".csv") ? filename : filename + ".csv";
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
-  // ===== SAVE/LOAD/DELETE (max 3) =====
   const doSave = () => {
     let name = (s.productName || "").trim();
     if (!name) {
-      const typed = prompt(
-        "Enter product name to save (Ilagay ang pangalan ng produkto):"
-      );
+      const typed = prompt("Enter product name to save (Ilagay ang pangalan ng produkto):");
       if (!typed) return;
       name = String(typed).trim();
     }
-    // exclude volatile fields
+
     const { saves, productName, ...data } = s;
     const snapshot = { name, ts: Date.now(), data };
 
     let newSaves = Array.isArray(s.saves) ? [...s.saves] : [];
     if (newSaves.length >= 3) {
-      const confirmOverride = confirm(
-        `You already have 3 saves. Override the 1st save ("${newSaves[0].name}") and push others down?\n\n` +
-          `May 3 saves ka na. I-override ang unang save ("${newSaves[0].name}") at itulak pababa ang iba?`
+      const ok = confirm(
+        "You already have 3 saves. Override the 1st save (\"" +
+          newSaves[0].name +
+          "\") and push others down?\n\n" +
+          "May 3 saves ka na. I-override ang unang save (\"" +
+          newSaves[0].name +
+          "\") at itulak pababa ang iba?"
       );
-      if (!confirmOverride) return;
+      if (!ok) return;
       newSaves = [snapshot, ...newSaves].slice(0, 3);
     } else {
       newSaves = [snapshot, ...newSaves];
     }
+
     setS({ ...s, saves: newSaves, productName: name });
-    alert(`Saved: ${name}`);
+    alert("Saved: " + name);
   };
 
   const loadSave = (idx) => {
     const entry = s.saves[idx];
     if (!entry) return;
-    const loaded = {
-      ...entry.data,
-      saves: s.saves,
-      productName: entry.name,
-    };
-    setS(loaded);
+    setS({ ...entry.data, saves: s.saves, productName: entry.name });
   };
 
   const deleteSave = (idx) => {
     const entry = s.saves[idx];
     if (!entry) return;
-    const ok = confirm(
-      `Delete save "${entry.name}"? (Burahin ang save na ito?)`
-    );
+    const ok = confirm("Delete save \"" + entry.name + "\"? (Burahin ang save na ito?)");
     if (!ok) return;
-    const newSaves = s.saves.filter((_, i) => i !== idx);
-    setS({ ...s, saves: newSaves });
+    setS({ ...s, saves: s.saves.filter((_, i) => i !== idx) });
   };
 
   const downloadOneSave = (idx) => {
@@ -393,102 +505,110 @@ export default function App() {
       alert("No saves to download.");
       return;
     }
-    const rows = s.saves.map(toCsvRow);
-    downloadCSV(
-      rows,
-      "DS3DPC_Saves_" + new Date().toISOString().slice(0, 10)
-    );
+    downloadCSV(s.saves.map(toCsvRow), "DS3DPC_Saves_" + new Date().toISOString().slice(0, 10));
   };
 
   const fmtDate = (ts) => new Date(ts).toLocaleString();
 
-  // ===== Self-test – CSV & electricity checks =====
   const selfTest = () => {
     try {
-      // Case 1: Baseline CSV row generation has no embedded newlines
-      const entry = {
+      const entryWatt = {
         name: "Test Item",
         ts: Date.now(),
         data: {
+          ...INITIAL_STATE,
           pricingMode: "fixed",
-          spoolPrice: 1000,
-          spoolWeight: 1000,
           fixedPerGram: 2,
           partWeight: 12.5,
           printTimeHours: 3.5,
           printTimeMinutes: 0,
           printTimeSeconds: 0,
           electricityMode: "wattage",
-          energyUsedKwh: "",
           wattage: 120,
           kwhPrice: 12,
           laborCost: 50,
           packaging: 10,
-          paint: 0,
-          adhesives: 0,
-          shipping: 0,
-          modelingFee: 0,
           failureMarginPct: 10,
           markupPct: 20,
         },
       };
-      const row = toCsvRow(entry);
-      if (
-        !row ||
-        typeof row !== "string" ||
-        row.indexOf("\n") !== -1
-      )
-        throw new Error("Row format invalid");
 
-      // Case 2: Escaping quotes inside values
-      const quoted = toCsvRow({
-        ...entry,
-        name: 'He said "hello"',
-      });
-      if (!quoted.startsWith('"He said ""hello"""'))
-        throw new Error("CSV quote escaping failed");
+      const row = toCsvRow(entryWatt);
+      if (!row || typeof row !== "string" || row.indexOf("\n") !== -1) throw new Error("Row format invalid");
 
-      // Case 3: Electricity sanity — wattage mode
-      const watt = 120;
-      const hrs = 3.5;
-      const rate = 12;
-      const expectedElec = (watt * hrs / 1000) * rate; // 120*3.5/1000*12
-      const cells = quoted.split(",");
+      const quoted = toCsvRow({ ...entryWatt, name: 'He said "hello"' });
+      if (!quoted.startsWith('"He said ""hello"""')) throw new Error("CSV quote escaping failed");
+
+      const expectedElecWatt = (120 * 3.5 / 1000) * 12;
+      const cellsWatt = quoted.split(",");
       const idxElec = csvHeaders.indexOf("Electricity Cost");
-      const elecVal = parseFloat(cells[idxElec]);
-      const close = (a, b, eps = 0.02) =>
-        Math.abs(a - b) < eps;
-      if (!close(elecVal, expectedElec, 0.02))
-        throw new Error(
-          "Electricity cost calc check failed"
-        );
+      const elecValWatt = parseFloat(cellsWatt[idxElec]);
+      if (Math.abs(elecValWatt - expectedElecWatt) > 0.02) throw new Error("Electricity (wattage) calc check failed");
 
-      // BOM presence
-      const rows = [row, quoted];
-      const content =
-        BOM + csvHeaders.join(",") + "\n" + rows.join("\n");
-      if (content.charCodeAt(0) !== 0xFEFF)
-        throw new Error("Missing BOM");
+      const entryKw = {
+        name: "KW Mode",
+        ts: Date.now(),
+        data: {
+          ...INITIAL_STATE,
+          pricingMode: "fixed",
+          fixedPerGram: 2,
+          partWeight: 10,
+          printTimeHours: 2,
+          printTimeMinutes: 30,
+          printTimeSeconds: 0,
+          electricityMode: "kw",
+          kwPreset: "other",
+          kwCustom: 0.129,
+          kwhPrice: 12,
+        },
+      };
 
-      alert("Self-test passed: CSV & electricity checks OK.");
+      const rowKw = toCsvRow(entryKw);
+      const cellsKw = rowKw.split(",");
+      const elecValKw = parseFloat(cellsKw[idxElec]);
+      const printHrsKw = 2 + 30 / 60;
+      const expectedElecKw = 0.129 * printHrsKw * 12;
+      if (Math.abs(elecValKw - expectedElecKw) > 0.02) throw new Error("Electricity (kW) calc check failed");
+
+      const entryPhpHr = {
+        name: "PHP/hr Mode",
+        ts: Date.now(),
+        data: {
+          ...INITIAL_STATE,
+          pricingMode: "fixed",
+          fixedPerGram: 2,
+          partWeight: 10,
+          printTimeHours: 1,
+          printTimeMinutes: 0,
+          printTimeSeconds: 0,
+          electricityMode: "php_per_hour",
+          electricityPhpPerHour: 7.5,
+        },
+      };
+
+      const rowPhpHr = toCsvRow(entryPhpHr);
+      const cellsPhpHr = rowPhpHr.split(",");
+      const elecValPhpHr = parseFloat(cellsPhpHr[idxElec]);
+      const expectedElecPhpHr = 7.5;
+      if (Math.abs(elecValPhpHr - expectedElecPhpHr) > 0.02) throw new Error("Electricity (₱/hr) calc check failed");
+
+      const content = BOM + csvHeaders.join(",") + "\n" + [row, quoted, rowKw, rowPhpHr].join("\n");
+      if (content.charCodeAt(0) !== 0xfeff) throw new Error("Missing BOM");
+
+      alert("Self-test passed: CSV + electricity modes OK.");
     } catch (e) {
-      alert("Self-test FAILED: " + e.message);
+      alert("Self-test FAILED: " + (e && e.message ? e.message : String(e)));
     }
   };
 
-  // ===== UI =====
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="mx-auto max-w-5xl">
-        {/* Header + Save controls */}
         <header className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
-            <h1 className="text-2xl font-bold">
-              Dr Shiela 3D Prints 3D Printing Calculator 🇵🇭
-            </h1>
+            <h1 className="text-2xl font-bold">Dr Shiela 3D Prints 3D Printing Calculator 🇵🇭</h1>
             <p className="text-sm text-gray-600">
-              Version 1.4 · PHP-only · Persists on refresh · Hover
-              labels for English/Tagalog help.
+              Version 1.5 · PHP-only · Persists on refresh · Hover labels for English/Tagalog help.
             </p>
           </div>
 
@@ -499,549 +619,297 @@ export default function App() {
                 className="rounded-xl border p-2 text-sm"
                 placeholder="Enter product name (Pangalan ng produkto)"
                 value={s.productName}
-                onChange={(e) =>
-                  setS({ ...s, productName: e.target.value })
-                }
+                onChange={(e) => setS({ ...s, productName: e.target.value })}
                 title="Used as the file name for saves (Gagamitin bilang pangalan ng file sa save)"
               />
             </div>
-            <button
-              onClick={doSave}
-              className="rounded-2xl border bg-gray-900 px-3 py-2 text-sm text-white shadow-sm"
-            >
-              Save
-            </button>
-            <button
-              onClick={downloadAllSaves}
-              className="rounded-2xl border px-3 py-2 text-sm shadow-sm"
-            >
-              Download All (.csv)
-            </button>
-            <button
-              onClick={() =>
-                setMode(
-                  s.pricingMode === "derive" ? "fixed" : "derive"
-                )
-              }
-              className="rounded-2xl border px-3 py-2 text-sm shadow-sm"
-            >
-              Toggle Mode
-            </button>
-            <button
-              onClick={selfTest}
-              className="rounded-2xl border px-3 py-2 text-sm shadow-sm"
-              title="Runs a couple of sanity checks on CSV"
-            >
-              Run self-test
-            </button>
+
+            <button onClick={doSave} className="rounded-2xl border bg-gray-900 px-3 py-2 text-sm text-white shadow-sm">Save</button>
+            <button onClick={downloadAllSaves} className="rounded-2xl border px-3 py-2 text-sm shadow-sm">Download All (.csv)</button>
+            <button onClick={() => setMode(s.pricingMode === "derive" ? "fixed" : "derive")} className="rounded-2xl border px-3 py-2 text-sm shadow-sm">Toggle Mode</button>
+            <button onClick={selfTest} className="rounded-2xl border px-3 py-2 text-sm shadow-sm" title="Runs a couple of sanity checks on CSV">Run self-test</button>
+            <button onClick={resetEverything} className="rounded-2xl border px-3 py-2 text-sm shadow-sm text-red-700" title="Clears all fields + saves">Reset Everything</button>
           </div>
         </header>
 
-        {/* Grid: 3 columns */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          {/* LEFT: Material Cost */}
           <section className="col-span-1 space-y-3 rounded-2xl bg-white p-4 shadow">
-            <h2 className="mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">
-              Material Cost
-            </h2>
-            <h3 className="-mt-1 text-sm text-gray-600">
-              Price per Gram (2 Ways. Choose 1)
-            </h3>
+            <h2 className="mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">Material Cost</h2>
+            <h3 className="-mt-1 text-sm text-gray-600">Price per Gram (2 Ways. Choose 1)</h3>
 
-            {/* Derive from spool */}
-            <div
-              className="mt-2 flex items-center gap-2"
-              title="Use spool price and weight to compute PHP/g (Gamitin ang presyo at bigat ng spool para sa PHP/g)"
-            >
-              <input
-                type="checkbox"
-                checked={s.pricingMode === "derive"}
-                onChange={() => setMode("derive")}
-              />
-              <label className="font-medium">
-                Derive from spool
-              </label>
+            <div className="mt-2 flex items-center gap-2" title="Use spool price and weight to compute PHP/g (Gamitin ang presyo at bigat ng spool para sa PHP/g)">
+              <input type="checkbox" checked={s.pricingMode === "derive"} onChange={() => setMode("derive")} />
+              <label className="font-medium">Derive from spool</label>
             </div>
+
             <div className="grid grid-cols-2 gap-3">
-              <Field
-                label={"Spool price (" + PHP + ")"}
-                hint="Total cost of one filament spool (Kung magkano mo nabili ang 1 spool ng filament)."
-              >
-                <Num
-                  value={s.spoolPrice}
-                  onChange={(v) =>
-                    setS({ ...s, spoolPrice: v })
-                  }
-                />
+              <Field label={`Spool price (${PHP})`} hint="Total cost of one filament spool (Kung magkano mo nabili ang 1 spool ng filament).">
+                <Num value={s.spoolPrice} onChange={(v) => setS({ ...s, spoolPrice: v })} />
               </Field>
-              <Field
-                label="Spool weight (g)"
-                hint="Weight of the entire spool, usually 1000 g (Bigat ng buong spool, usually 1000 g (1kg))."
-              >
-                <Num
-                  value={s.spoolWeight}
-                  onChange={(v) =>
-                    setS({ ...s, spoolWeight: v })
-                  }
-                />
+              <Field label="Spool weight (g)" hint="Weight of the entire spool, usually 1000 g (Bigat ng buong spool, usually 1000 g (1kg)).">
+                <Num value={s.spoolWeight} onChange={(v) => setS({ ...s, spoolWeight: v })} />
               </Field>
             </div>
 
-            <div className="my-2 text-center text-xs text-gray-400">
-              — or —
+            <div className="my-2 text-center text-xs text-gray-400">— or —</div>
+
+            <div className="flex items-center gap-2" title="Use your own PHP/g (Gamitin ang sarili mong PHP/g)">
+              <input type="checkbox" checked={s.pricingMode === "fixed"} onChange={() => setMode("fixed")} />
+              <label className="font-medium">Fixed price/gram ({PHP}/g)</label>
             </div>
 
-            {/* Fixed per gram */}
-            <div
-              className="flex items-center gap-2"
-              title="Use your own PHP/g (Gamitin ang sarili mong PHP/g)"
-            >
-              <input
-                type="checkbox"
-                checked={s.pricingMode === "fixed"}
-                onChange={() => setMode("fixed")}
-              />
-              <label className="font-medium">
-                Fixed price/gram ({PHP}/g)
-              </label>
-            </div>
-            <Field
-              label={`Set price (${PHP}/g)`}
-              hint="Your set selling rate per gram (Kung ano yung rate mo per gram)."
-            >
-              <Num
-                value={s.fixedPerGram}
-                onChange={(v) =>
-                  setS({ ...s, fixedPerGram: v })
-                }
-              />
+            <Field label={`Set price (${PHP}/g)`} hint="Your set selling rate per gram (Kung ano yung rate mo per gram).">
+              <Num value={s.fixedPerGram} onChange={(v) => setS({ ...s, fixedPerGram: v })} />
             </Field>
 
-            {/* Usage */}
-            <h3 className="mt-4 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">
-              Usage
-            </h3>
-            <Field
-              label="Filament consumed (g)"
-              hint="From your slicer’s estimate (Mula sa estimate ng slicer. Makikita mo sa preview after mag-slice)."
-            >
-              <Num
-                value={s.partWeight}
-                onChange={(v) =>
-                  setS({ ...s, partWeight: v })
-                }
-              />
+            <h3 className="mt-4 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">Usage</h3>
+            <Field label="Filament consumed (g)" hint="From your slicer’s estimate (Mula sa estimate ng slicer. Makikita mo sa preview after mag-slice).">
+              <Num value={s.partWeight} onChange={(v) => setS({ ...s, partWeight: v })} />
             </Field>
 
-            {/* Support message + Social buttons */}
             <div className="mt-4 rounded bg-yellow-50 p-3 text-sm">
               <strong>
-                Kung nakatulong sa’yo ang calculator na ito, please
-                support me para makagawa pa ako ng mga content na
-                makakatulong sa 3D printing journey mo. Follow me on
-                Youtube and Facebook.
+                Kung nakatulong sa'yo ang calculator na ito, please support me para makagawa pa ako ng mga content na makakatulong sa 3D printing journey mo. Follow me on Youtube, Facebook, TikTok and Instagram.
               </strong>
             </div>
+
             <div className="mt-3 flex flex-wrap gap-2">
-              <a
+              <ExternalLink
                 href={s.facebookUrl}
-                target="_blank"
-                rel="noreferrer"
                 className="rounded-2xl border border-blue-600 bg-blue-600 px-3 py-2 text-sm text-white shadow-sm"
                 title="Follow me on Facebook"
               >
                 Facebook
-              </a>
-              <a
+              </ExternalLink>
+
+              <ExternalLink
                 href={s.youtubeUrl}
-                target="_blank"
-                rel="noreferrer"
                 className="rounded-2xl border border-red-600 bg-red-600 px-3 py-2 text-sm text-white shadow-sm"
                 title="Follow me on YouTube"
               >
                 YouTube
-              </a>
+              </ExternalLink>
+
+              <ExternalLink
+                href={s.tiktokUrl}
+                className="rounded-2xl border border-black bg-black px-3 py-2 text-sm text-white shadow-sm"
+                title="Follow me on TikTok"
+              >
+                TikTok
+              </ExternalLink>
+
+              <ExternalLink
+                href={s.instagramUrl}
+                className="rounded-2xl border border-fuchsia-600 bg-fuchsia-600 px-3 py-2 text-sm text-white shadow-sm"
+                title="Follow me on Instagram"
+              >
+                Instagram
+              </ExternalLink>
             </div>
+
+            <div className="mt-3 rounded-xl border bg-white p-3 text-sm">
+              <div className="font-semibold">Tapo Monitoring Device I use:</div>
+              <ExternalLink
+                href={s.tapoUrl}
+                className="mt-2 inline-block rounded-xl border px-3 py-2 text-sm shadow-sm"
+                title="Open my Shopee link"
+              >
+                Open Shopee link
+              </ExternalLink>
+            </div>
+
             {useCount !== null && (
               <div className="mt-6 text-center text-sm text-gray-600">
-                <strong>{useCount.toLocaleString()}</strong>{" "}
-                people have used this 3D printing calculator.
+                <strong>{useCount.toLocaleString()}</strong> people have used this 3D printing calculator.
               </div>
             )}
           </section>
 
-          {/* MIDDLE: Print & Power + Labor */}
           <section className="col-span-1 space-y-3 rounded-2xl bg-white p-4 shadow">
-            <h2 className="mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">
-              Print & Power
-            </h2>
+            <h2 className="mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">Print & Power</h2>
 
-            {/* Print time */}
-            <Field
-              label="Print time"
-              hint="Total printing duration (Kabuuang oras ng pagpi-print. Makikita rin sa slicer)."
-            >
+            <Field label="Print time" hint="Total printing duration (Kabuuang oras ng pagpi-print. Makikita rin sa slicer).">
               <div className="grid grid-cols-3 gap-2">
-                <Num
-                  value={s.printTimeHours}
-                  onChange={(v) =>
-                    setS({ ...s, printTimeHours: v })
-                  }
-                  placeholder="Hours"
-                />
-                <Num
-                  value={s.printTimeMinutes}
-                  onChange={(v) =>
-                    setS({ ...s, printTimeMinutes: v })
-                  }
-                  placeholder="Minutes"
-                />
-                <Num
-                  value={s.printTimeSeconds}
-                  onChange={(v) =>
-                    setS({ ...s, printTimeSeconds: v })
-                  }
-                  placeholder="Seconds"
-                />
+                <Num value={s.printTimeHours} onChange={(v) => setS({ ...s, printTimeHours: v })} placeholder="Hours" />
+                <Num value={s.printTimeMinutes} onChange={(v) => setS({ ...s, printTimeMinutes: v })} placeholder="Minutes" />
+                <Num value={s.printTimeSeconds} onChange={(v) => setS({ ...s, printTimeSeconds: v })} placeholder="Seconds" />
               </div>
-              <div className="mt-1 text-xs text-gray-500">
-                Decimal hours used for computation: {pretty(printTimeHoursTotal)} h
-              </div>
+              <div className="mt-1 text-xs text-gray-500">Decimal hours used for computation: {pretty(printTimeHoursTotal)} h</div>
             </Field>
 
-            {/* Electricity price */}
-            <Field
-              label={"Electricity price (" + PHP + "/kWh)"}
-              hint="Your electric rate per kWh (Presyo ng kuryente kada kWh. Check your electricity bill)."
-            >
-              <Num
-                value={s.kwhPrice}
-                onChange={(v) =>
-                  setS({ ...s, kwhPrice: v })
-                }
-              />
+            <Field label={`Electricity price (${PHP}/kWh)`} hint="Your electric rate per kWh (Presyo ng kuryente kada kWh. Check your electricity bill).">
+              <Num value={s.kwhPrice} onChange={(v) => setS({ ...s, kwhPrice: v })} />
             </Field>
 
-            {/* Electricity mode toggle */}
-            <h3 className="mt-3 text-sm font-semibold text-gray-700">
-              Electricity cost mode (2 ways)
-            </h3>
+            <div className="mt-3 rounded bg-blue-600 px-3 py-2 text-center text-sm font-bold text-white">Electricity cost mode (3 ways)</div>
 
-            {/* Mode 1: Wattage × hours */}
-            <div
-              className="mt-2 flex items-center gap-2"
-              title="Compute using printer wattage and print time (Gamit ang wattage ng 3D printer at oras ng pagpi-print)."
-            >
-              <input
-                type="checkbox"
-                checked={modeElec === "wattage"}
-                onChange={() => setElecMode("wattage")}
-              />
-              <span className="text-sm font-medium">
-                Use printer wattage × print time
-              </span>
+            <div className="mt-2 flex items-center gap-2" title="Compute using printer wattage and print time">
+              <input type="checkbox" checked={modeElec === "wattage"} onChange={() => setElecMode("wattage")} />
+              <span className="text-sm font-medium">Use printer wattage × print time</span>
             </div>
+
             {modeElec === "wattage" && (
-              <Field
-                label="Printer wattage (W)"
-                hint="Average power draw of your printer (Average na konsumo ng kuryente ng machine. I-check sa internet ang specs ng 3D printer mo)."
-              >
-                <Num
-                  value={s.wattage}
-                  onChange={(v) =>
-                    setS({ ...s, wattage: v })
-                  }
-                />
+              <Field label="Printer wattage (W)" hint="Average power draw of your printer (Average na konsumo ng kuryente ng machine. I-check sa internet ang specs ng 3D printer mo).">
+                <Num value={s.wattage} onChange={(v) => setS({ ...s, wattage: v })} />
               </Field>
             )}
 
-            <div className="my-2 text-center text-xs text-gray-400">
-              — or —
+            <div className="my-2 text-center text-xs text-gray-400">— or —</div>
+
+            <div className="flex items-center gap-2" title="Compute using average power (kW) based on monitoring device readings">
+              <input type="checkbox" checked={modeElec === "kw"} onChange={() => setElecMode("kw")} />
+              <span className="text-sm font-medium">Use average energy (kW) from monitoring device</span>
             </div>
 
-            {/* Mode 2: Measured kWh per hour */}
-            <div
-              className="flex items-center gap-2"
-              title="Compute using average kWh per hour from a monitoring device (Gamit ang average kWh/hr reading mula sa power meter)."
-            >
-              <input
-                type="checkbox"
-                checked={modeElec === "kwh"}
-                onChange={() => setElecMode("kwh")}
-              />
-              <span className="text-sm font-medium">
-                Use average energy (kWh/hr) from monitoring device
-              </span>
+            {modeElec === "kw" && (
+              <>
+                <Field label="Select printer model (kW)" hint={HELP_KW_HINT}>
+                  <select
+                    className="w-full rounded-xl border p-2 outline-none focus:border-gray-400"
+                    value={s.kwPreset}
+                    onChange={(e) => setS({ ...s, kwPreset: e.target.value })}
+                  >
+                    {KW_PRESETS.map((p) => (
+                      <option key={p.key} value={p.key}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+
+                {String(s.kwPreset) === "other" && (
+                  <Field label="Custom average power (kW)" hint="Ilagay ang sarili mong kW value (average power) based sa monitoring device mo.">
+                    <Num value={s.kwCustom} onChange={(v) => setS({ ...s, kwCustom: v })} step={0.001} />
+                  </Field>
+                )}
+
+                <div className="rounded-xl border bg-gray-50 p-3 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-600">Selected average power</span>
+                    <span className="font-semibold">{pretty(avgKw)} kW</span>
+                  </div>
+                  <div className="mt-1 text-xs text-gray-500">Formula: (kW) × (print hours) × (₱/kWh)</div>
+                </div>
+              </>
+            )}
+
+            <div className="my-2 text-center text-xs text-gray-400">— or —</div>
+
+            <div className="flex items-center gap-2" title="Set a fixed electricity cost per print hour (Example: ₱5 per hour).">
+              <input type="checkbox" checked={modeElec === "php_per_hour"} onChange={() => setElecMode("php_per_hour")} />
+              <span className="text-sm font-medium">Set electricity cost per hour (₱/hr)</span>
             </div>
-            {modeElec === "kwh" && (
-              <Field
-                label="Average energy used (kWh per hour)"
-                hint="Average kWh per hour from power monitor, multiplied by total print hours (Average kWh kada oras mula sa monitoring device)."
-              >
-                <Num
-                  value={s.energyUsedKwh}
-                  onChange={(v) =>
-                    setS({ ...s, energyUsedKwh: v })
-                  }
-                />
+
+            {modeElec === "php_per_hour" && (
+              <Field label={`Electricity cost per hour (${PHP}/hr)`} hint="Example: ₱5 per hour. Formula: (₱/hr) × (print hours).">
+                <Num value={s.electricityPhpPerHour} onChange={(v) => setS({ ...s, electricityPhpPerHour: v })} step={0.01} />
               </Field>
             )}
 
-            <h2 className="mt-4 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">
-              Labor (direct cost)
-            </h2>
-            <Field
-              label={"Labor cost (" + PHP + ")"}
-              hint="Your time cost (e.g., cleaning, support removal, post-processing) (Gastos sa oras/ paggawa)."
-            >
-              <Num
-                value={s.laborCost}
-                onChange={(v) =>
-                  setS({ ...s, laborCost: v })
-                }
-              />
+            <h2 className="mt-4 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">Labor (direct cost)</h2>
+            <Field label={`Labor cost (${PHP})`} hint="Your time cost (e.g., cleaning, support removal, post-processing) (Gastos sa oras/paggawa).">
+              <Num value={s.laborCost} onChange={(v) => setS({ ...s, laborCost: v })} />
             </Field>
           </section>
 
-          {/* RIGHT: Other Costs + Margins + Summary */}
           <section className="col-span-1 space-y-3 rounded-2xl bg-white p-4 shadow">
-            <h2 className="mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">
-              Other Costs
-            </h2>
+            <h2 className="mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">Other Costs</h2>
             <div className="grid grid-cols-2 gap-3">
-              <Field
-                label={`Packaging (${PHP})`}
-                hint="Boxes, bubble wrap, labels (Kahon, bubble wrap, label)."
-              >
-                <Num
-                  value={s.packaging}
-                  onChange={(v) =>
-                    setS({ ...s, packaging: v })
-                  }
-                />
+              <Field label={`Packaging (${PHP})`} hint="Boxes, bubble wrap, labels (Kahon, bubble wrap, label).">
+                <Num value={s.packaging} onChange={(v) => setS({ ...s, packaging: v })} />
               </Field>
-              <Field
-                label={`Paint (${PHP})`}
-                hint="Paints, primers, sealers (Pintura, primer, sealer)."
-              >
-                <Num
-                  value={s.paint}
-                  onChange={(v) =>
-                    setS({ ...s, paint: v })
-                  }
-                />
+              <Field label={`Paint (${PHP})`} hint="Paints, primers, sealers (Pintura, primer, sealer).">
+                <Num value={s.paint} onChange={(v) => setS({ ...s, paint: v })} />
               </Field>
-              <Field
-                label={`Adhesives (${PHP})`}
-                hint="Glue, epoxy, CA, tape (Pandikit, epoxy, CA)."
-              >
-                <Num
-                  value={s.adhesives}
-                  onChange={(v) =>
-                    setS({ ...s, adhesives: v })
-                  }
-                />
+              <Field label={`Adhesives (${PHP})`} hint="Glue, epoxy, CA, tape (Pandikit, epoxy, CA).">
+                <Num value={s.adhesives} onChange={(v) => setS({ ...s, adhesives: v })} />
               </Field>
-              <Field
-                label={`Shipping (${PHP})`}
-                hint="Courier fees or delivery cost (Bayad sa courier o delivery)."
-              >
-                <Num
-                  value={s.shipping}
-                  onChange={(v) =>
-                    setS({ ...s, shipping: v })
-                  }
-                />
+              <Field label={`Shipping (${PHP})`} hint="Courier fees or delivery cost (Bayad sa courier o delivery).">
+                <Num value={s.shipping} onChange={(v) => setS({ ...s, shipping: v })} />
               </Field>
-              <Field
-                label={`3D modeling fee (${PHP})`}
-                hint="Fee for 3D design/modelling work (Bayad para sa 3D design/modelling)."
-              >
-                <Num
-                  value={s.modelingFee}
-                  onChange={(v) =>
-                    setS({ ...s, modelingFee: v })
-                  }
-                />
+              <Field label={`3D modeling fee (${PHP})`} hint="Fee for 3D design/modelling work (Bayad para sa 3D design/modelling).">
+                <Num value={s.modelingFee} onChange={(v) => setS({ ...s, modelingFee: v })} />
               </Field>
             </div>
 
-            <h2 className="mt-4 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">
-              Margins
-            </h2>
+            <h2 className="mt-4 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">Margins</h2>
             <div className="grid grid-cols-2 gap-3">
-              <Field
-                label="Failure margin (%)"
-                hint="Covers misprints/waste (Isinasaalang-alang ang mga posibleng pagkakamali sa pagpi-print, mga sirang output, o nasasayang na filament sa proseso ng 3D printing)."
-              >
-                <Num
-                  value={s.failureMarginPct}
-                  onChange={(v) =>
-                    setS({ ...s, failureMarginPct: v })
-                  }
-                />
+              <Field label="Failure margin (%)" hint="Covers misprints/waste (Isinasaalang-alang ang posibleng misprints/sayang).">
+                <Num value={s.failureMarginPct} onChange={(v) => setS({ ...s, failureMarginPct: v })} />
               </Field>
-              <Field
-                label="Profit markup (%)"
-                hint="Your profit on top of costs (Tubong idinadagdag sa lahat ng gastos)."
-              >
-                <Num
-                  value={s.markupPct}
-                  onChange={(v) =>
-                    setS({ ...s, markupPct: v })
-                  }
-                />
+              <Field label="Profit markup (%)" hint="Your profit on top of costs (Tubong idinadagdag sa lahat ng gastos).">
+                <Num value={s.markupPct} onChange={(v) => setS({ ...s, markupPct: v })} />
               </Field>
             </div>
 
-            <h2 className="mt-4 rounded bg-yellow-400 px-3 py-1 text-lg font-bold text-black">
-              Computed Summary
-            </h2>
+            <h2 className="mt-4 rounded bg-yellow-400 px-3 py-1 text-lg font-bold text-black">Computed Summary</h2>
             <div className="space-y-2 rounded-xl border p-3 text-sm">
-              <Row label="Price/gram">
-                {PHP} {pretty(pricePerGram)} / g
-              </Row>
-              <Row label="Material cost">
-                {PHP} {pretty(materialCost)}
-              </Row>
-              <Row label="Electricity cost">
-                {PHP} {pretty(electricityCost)}
-              </Row>
-              <Row label="Labor cost">
-                {PHP} {pretty(laborCostNum)}
-              </Row>
-              <Row label="Packaging">
-                {PHP} {pretty(packagingCost)}
-              </Row>
-              <Row label="Paint">
-                {PHP} {pretty(paintCost)}
-              </Row>
-              <Row label="Adhesives">
-                {PHP} {pretty(adhesivesCost)}
-              </Row>
+              <Row label="Price/gram">{PHP} {pretty(pricePerGram)} / g</Row>
+              <Row label="Material cost">{PHP} {pretty(materialCost)}</Row>
+              <Row label="Electricity cost">{PHP} {pretty(electricityCost)}</Row>
+              <Row label="Labor cost">{PHP} {pretty(laborCostNum)}</Row>
+              <Row label="Packaging">{PHP} {pretty(packagingCost)}</Row>
+              <Row label="Paint">{PHP} {pretty(paintCost)}</Row>
+              <Row label="Adhesives">{PHP} {pretty(adhesivesCost)}</Row>
 
               <hr />
 
-              <Row label="3D modeling fee">
-                {PHP} {pretty(modelingFeeCost)}
-              </Row>
+              <Row label="3D modeling fee">{PHP} {pretty(modelingFeeCost)}</Row>
 
               <hr />
 
-              <Row label="Shipping fee">
-                {PHP} {pretty(shippingCost)}
-              </Row>
+              <Row label="Shipping fee">{PHP} {pretty(shippingCost)}</Row>
 
               <hr />
 
-              <Row label="Subtotal">
-                {PHP} {pretty(baseSubtotal)}
-              </Row>
-              <Row
-                label={
-                  "Failure margin (" +
-                  s.failureMarginPct +
-                  "%)"
-                }
-              >
-                {PHP} {pretty(failureMarginAmount)}
-              </Row>
-              <Row
-                label={
-                  "Mark Up (" +
-                  s.markupPct +
-                  "% of subtotal)"
-                }
-              >
-                {PHP} {pretty(markupAmount)}
-              </Row>
-              <Row label="Final Price" strong>
-                {PHP} {pretty(finalPrice)}
-              </Row>
+              <Row label="Subtotal">{PHP} {pretty(baseSubtotal)}</Row>
+              <Row label={`Failure margin (${s.failureMarginPct}%)`}>{PHP} {pretty(failureMarginAmount)}</Row>
+              <Row label={`Mark Up (${s.markupPct}% of subtotal)`}>{PHP} {pretty(markupAmount)}</Row>
+              <Row label="Final Price" strong>{PHP} {pretty(finalPrice)}</Row>
             </div>
           </section>
         </div>
 
-        {/* Saves list with per-save download */}
         <section className="mt-6 rounded-2xl bg-white p-4 shadow">
-          <h2 className="mb-2 text-lg font-semibold">
-            Saved Computations (max 3)
-          </h2>
+          <h2 className="mb-2 text-lg font-semibold">Saved Computations (max 3)</h2>
           {!s.saves || s.saves.length === 0 ? (
-            <p className="text-sm text-gray-500">
-              No saves yet. After entering details, click{" "}
-              <strong>Save</strong>. (Wala pang save. Maglagay ng
-              detalye at i-click ang <strong>Save</strong>.)
-            </p>
+            <p className="text-sm text-gray-500">No saves yet. After entering details, click <strong>Save</strong>. (Wala pang save. Maglagay ng detalye at i-click ang <strong>Save</strong>.)</p>
           ) : (
             <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
               {s.saves.map((entry, i) => (
-                <div
-                  key={i}
-                  className="rounded-xl border p-3 text-sm"
-                >
-                  <div className="font-medium">
-                    {i + 1}. {entry.name}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {fmtDate(entry.ts)}
-                  </div>
+                <div key={i} className="rounded-xl border p-3 text-sm">
+                  <div className="font-medium">{i + 1}. {entry.name}</div>
+                  <div className="text-xs text-gray-500">{fmtDate(entry.ts)}</div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    <button
-                      className="rounded border px-2 py-1"
-                      onClick={() => loadSave(i)}
-                    >
-                      Load
-                    </button>
-                    <button
-                      className="rounded border px-2 py-1 text-red-600"
-                      onClick={() => deleteSave(i)}
-                    >
-                      Delete
-                    </button>
-                    <button
-                      className="rounded border px-2 py-1"
-                      onClick={() => downloadOneSave(i)}
-                    >
-                      Download (.csv)
-                    </button>
+                    <button className="rounded border px-2 py-1" onClick={() => loadSave(i)}>Load</button>
+                    <button className="rounded border px-2 py-1 text-red-600" onClick={() => deleteSave(i)}>Delete</button>
+                    <button className="rounded border px-2 py-1" onClick={() => downloadOneSave(i)}>Download (.csv)</button>
                   </div>
                 </div>
               ))}
             </div>
           )}
           <p className="mt-3">
-            <button
-              onClick={downloadAllSaves}
-              className="rounded-2xl border px-3 py-2 text-sm shadow-sm"
-            >
-              Download All (.csv)
-            </button>
+            <button onClick={downloadAllSaves} className="rounded-2xl border px-3 py-2 text-sm shadow-sm">Download All (.csv)</button>
           </p>
         </section>
 
-        <footer className="mt-6 text-center text-xs text-gray-500">
-          Built for GitHub Pages · DS3DP v1.4 · PHP only
-        </footer>
+        <footer className="mt-6 text-center text-xs text-gray-500">Built for GitHub Pages · DS3DP v1.5 · PHP only</footer>
       </div>
     </div>
   );
 }
 
-/* ---------- Small helper components ---------- */
 function Field({ label, children, hint }) {
   return (
     <div className="flex flex-col gap-1" title={hint}>
-      <label className="text-sm font-medium text-gray-700">
-        {label}
-      </label>
+      <label className="text-sm font-medium text-gray-700">{label}</label>
       {children}
-      {hint ? (
-        <div className="text-xs text-gray-500">{hint}</div>
-      ) : null}
+      {hint ? <div className="text-xs text-gray-500">{hint}</div> : null}
     </div>
   );
 }
+
 function Num({ value, onChange, min, step = 0.01, placeholder }) {
   return (
     <input
@@ -1055,13 +923,12 @@ function Num({ value, onChange, min, step = 0.01, placeholder }) {
     />
   );
 }
+
 function Row({ label, children, strong }) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-gray-600">{label}</span>
-      <span className={strong ? "font-semibold" : undefined}>
-        {children}
-      </span>
+      <span className={strong ? "font-semibold" : undefined}>{children}</span>
     </div>
   );
 }
