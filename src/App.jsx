@@ -270,17 +270,22 @@ export default function App() {
   const modelingFeeCost = Number(s.modelingFee) || 0;
   const laborCostNum = Number(s.laborCost) || 0;
 
-  const productionCost =
-    materialCost + electricityCost + laborCostNum + packagingCost + paintCost + adhesivesCost;
+  // ✅ CORE COST (ONLY THESE AFFECT FAILURE + MARKUP)
+  const coreCost = materialCost + electricityCost + laborCostNum;
 
-  const nonProductionCost = modelingFeeCost + shippingCost;
-  const baseSubtotal = productionCost + nonProductionCost;
+  // Other costs (pass-through / add-ons) — DO NOT affect failure margin or markup
+  const otherCosts =
+    packagingCost + paintCost + adhesivesCost + shippingCost + modelingFeeCost;
 
+  const baseSubtotal = coreCost + otherCosts;
+
+  // ✅ Failure margin applies ONLY to coreCost
   const failureMarginRate = Number(s.failureMarginPct) || 0;
-  const failureMarginAmount = productionCost * (failureMarginRate / 100);
+  const failureMarginAmount = coreCost * (failureMarginRate / 100);
 
+  // ✅ Markup applies ONLY to coreCost
   const markupRate = Number(s.markupPct) || 0;
-  const markupAmount = baseSubtotal * (markupRate / 100);
+  const markupAmount = coreCost * (markupRate / 100);
 
   const finalPrice = baseSubtotal + failureMarginAmount + markupAmount;
 
@@ -326,10 +331,10 @@ export default function App() {
     "Material Cost",
     "Electricity Cost",
     "Other Costs (pkg+paint+adh+ship+3D)",
-    "Production Cost",
-    "Non-Production Cost",
-    "Subtotal",
-    "With Failure (Subtotal + Failure)",
+    "Core Cost (mat+elec+labor)",
+    "Subtotal (core+others)",
+    "Failure Amount (core only)",
+    "Markup Amount (core only)",
     "Final Price",
   ];
 
@@ -383,20 +388,17 @@ export default function App() {
     const model = Number(d.modelingFee) || 0;
     const labor = Number(d.laborCost) || 0;
 
-    const production = mat + elec + labor + pkg + paint + adh;
-    const nonProduction = model + ship;
-    const sub = production + nonProduction;
+    const core = mat + elec + labor;
+    const others = pkg + paint + adh + ship + model;
+    const sub = core + others;
 
     const fmRate = Number(d.failureMarginPct) || 0;
-    const fmAmt = production * (fmRate / 100);
+    const fmAmt = core * (fmRate / 100);
 
     const muRate = Number(d.markupPct) || 0;
-    const muAmt = sub * (muRate / 100);
+    const muAmt = core * (muRate / 100);
 
-    const withFail = sub + fmAmt;
     const fin = sub + fmAmt + muAmt;
-
-    const others = pkg + paint + adh + ship + model;
 
     const cells = [
       entry.name,
@@ -424,10 +426,10 @@ export default function App() {
       mat,
       elec,
       others,
-      production,
-      nonProduction,
+      core,
       sub,
-      withFail,
+      fmAmt,
+      muAmt,
       fin,
     ];
 
@@ -512,90 +514,61 @@ export default function App() {
 
   const selfTest = () => {
     try {
-      const entryWatt = {
+      const entry = {
         name: "Test Item",
         ts: Date.now(),
         data: {
           ...INITIAL_STATE,
           pricingMode: "fixed",
           fixedPerGram: 2,
-          partWeight: 12.5,
-          printTimeHours: 3.5,
+          partWeight: 10, // mat = 20
+          printTimeHours: 1,
           printTimeMinutes: 0,
           printTimeSeconds: 0,
-          electricityMode: "wattage",
-          wattage: 120,
-          kwhPrice: 12,
-          laborCost: 50,
-          packaging: 10,
+          electricityMode: "php_per_hour",
+          electricityPhpPerHour: 5, // elec = 5
+          laborCost: 15, // labor = 15
+          packaging: 100,
+          paint: 50,
+          adhesives: 25,
+          shipping: 200,
+          modelingFee: 300,
           failureMarginPct: 10,
           markupPct: 20,
         },
       };
 
-      const row = toCsvRow(entryWatt);
-      if (!row || typeof row !== "string" || row.indexOf("\n") !== -1) throw new Error("Row format invalid");
+      const row = toCsvRow(entry);
+      if (!row || typeof row !== "string" || row.includes("\n")) {
+        throw new Error("Row format invalid");
+      }
 
-      const quoted = toCsvRow({ ...entryWatt, name: 'He said "hello"' });
-      if (!quoted.startsWith('"He said ""hello"""')) throw new Error("CSV quote escaping failed");
+      const cells = row.split(",");
+      const idxCore = csvHeaders.indexOf("Core Cost (mat+elec+labor)");
+      const idxSub = csvHeaders.indexOf("Subtotal (core+others)");
+      const idxFm = csvHeaders.indexOf("Failure Amount (core only)");
+      const idxMu = csvHeaders.indexOf("Markup Amount (core only)");
+      const idxFin = csvHeaders.indexOf("Final Price");
 
-      const expectedElecWatt = (120 * 3.5 / 1000) * 12;
-      const cellsWatt = quoted.split(",");
-      const idxElec = csvHeaders.indexOf("Electricity Cost");
-      const elecValWatt = parseFloat(cellsWatt[idxElec]);
-      if (Math.abs(elecValWatt - expectedElecWatt) > 0.02) throw new Error("Electricity (wattage) calc check failed");
+      const coreVal = parseFloat(cells[idxCore]);
+      const subVal = parseFloat(cells[idxSub]);
+      const fmVal = parseFloat(cells[idxFm]);
+      const muVal = parseFloat(cells[idxMu]);
+      const finVal = parseFloat(cells[idxFin]);
 
-      const entryKw = {
-        name: "KW Mode",
-        ts: Date.now(),
-        data: {
-          ...INITIAL_STATE,
-          pricingMode: "fixed",
-          fixedPerGram: 2,
-          partWeight: 10,
-          printTimeHours: 2,
-          printTimeMinutes: 30,
-          printTimeSeconds: 0,
-          electricityMode: "kw",
-          kwPreset: "other",
-          kwCustom: 0.129,
-          kwhPrice: 12,
-        },
-      };
+      // core = 20 + 5 + 15 = 40
+      // others = 100+50+25+200+300=675
+      // sub = 715
+      // fm = 4
+      // mu = 8
+      // fin = 727
+      if (Math.abs(coreVal - 40) > 0.01) throw new Error("Core calc failed");
+      if (Math.abs(subVal - 715) > 0.01) throw new Error("Subtotal calc failed");
+      if (Math.abs(fmVal - 4) > 0.01) throw new Error("Failure calc failed");
+      if (Math.abs(muVal - 8) > 0.01) throw new Error("Markup calc failed");
+      if (Math.abs(finVal - 727) > 0.01) throw new Error("Final calc failed");
 
-      const rowKw = toCsvRow(entryKw);
-      const cellsKw = rowKw.split(",");
-      const elecValKw = parseFloat(cellsKw[idxElec]);
-      const printHrsKw = 2 + 30 / 60;
-      const expectedElecKw = 0.129 * printHrsKw * 12;
-      if (Math.abs(elecValKw - expectedElecKw) > 0.02) throw new Error("Electricity (kW) calc check failed");
-
-      const entryPhpHr = {
-        name: "PHP/hr Mode",
-        ts: Date.now(),
-        data: {
-          ...INITIAL_STATE,
-          pricingMode: "fixed",
-          fixedPerGram: 2,
-          partWeight: 10,
-          printTimeHours: 1,
-          printTimeMinutes: 0,
-          printTimeSeconds: 0,
-          electricityMode: "php_per_hour",
-          electricityPhpPerHour: 7.5,
-        },
-      };
-
-      const rowPhpHr = toCsvRow(entryPhpHr);
-      const cellsPhpHr = rowPhpHr.split(",");
-      const elecValPhpHr = parseFloat(cellsPhpHr[idxElec]);
-      const expectedElecPhpHr = 7.5;
-      if (Math.abs(elecValPhpHr - expectedElecPhpHr) > 0.02) throw new Error("Electricity (₱/hr) calc check failed");
-
-      const content = BOM + csvHeaders.join(",") + "\n" + [row, quoted, rowKw, rowPhpHr].join("\n");
-      if (content.charCodeAt(0) !== 0xfeff) throw new Error("Missing BOM");
-
-      alert("Self-test passed: CSV + electricity modes OK.");
+      alert("Self-test passed: Failure + Markup apply to CORE only (mat+elec+labor).");
     } catch (e) {
       alert("Self-test FAILED: " + (e && e.message ? e.message : String(e)));
     }
@@ -624,29 +597,71 @@ export default function App() {
               />
             </div>
 
-            <button onClick={doSave} className="rounded-2xl border bg-gray-900 px-3 py-2 text-sm text-white shadow-sm">Save</button>
-            <button onClick={downloadAllSaves} className="rounded-2xl border px-3 py-2 text-sm shadow-sm">Download All (.csv)</button>
-            <button onClick={() => setMode(s.pricingMode === "derive" ? "fixed" : "derive")} className="rounded-2xl border px-3 py-2 text-sm shadow-sm">Toggle Mode</button>
-            <button onClick={selfTest} className="rounded-2xl border px-3 py-2 text-sm shadow-sm" title="Runs a couple of sanity checks on CSV">Run self-test</button>
-            <button onClick={resetEverything} className="rounded-2xl border px-3 py-2 text-sm shadow-sm text-red-700" title="Clears all fields + saves">Reset Everything</button>
+            <button
+              onClick={doSave}
+              className="rounded-2xl border bg-gray-900 px-3 py-2 text-sm text-white shadow-sm"
+            >
+              Save
+            </button>
+            <button
+              onClick={downloadAllSaves}
+              className="rounded-2xl border px-3 py-2 text-sm shadow-sm"
+            >
+              Download All (.csv)
+            </button>
+            <button
+              onClick={() => setMode(s.pricingMode === "derive" ? "fixed" : "derive")}
+              className="rounded-2xl border px-3 py-2 text-sm shadow-sm"
+            >
+              Toggle Mode
+            </button>
+            <button
+              onClick={selfTest}
+              className="rounded-2xl border px-3 py-2 text-sm shadow-sm"
+              title="Runs a couple of sanity checks on CSV + math"
+            >
+              Run self-test
+            </button>
+            <button
+              onClick={resetEverything}
+              className="rounded-2xl border px-3 py-2 text-sm shadow-sm text-red-700"
+              title="Clears all fields + saves"
+            >
+              Reset Everything
+            </button>
           </div>
         </header>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <section className="col-span-1 space-y-3 rounded-2xl bg-white p-4 shadow">
-            <h2 className="mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">Material Cost</h2>
+            <h2 className="mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">
+              Material Cost
+            </h2>
             <h3 className="-mt-1 text-sm text-gray-600">Price per Gram (2 Ways. Choose 1)</h3>
 
-            <div className="mt-2 flex items-center gap-2" title="Use spool price and weight to compute PHP/g (Gamitin ang presyo at bigat ng spool para sa PHP/g)">
-              <input type="checkbox" checked={s.pricingMode === "derive"} onChange={() => setMode("derive")} />
+            <div
+              className="mt-2 flex items-center gap-2"
+              title="Use spool price and weight to compute PHP/g (Gamitin ang presyo at bigat ng spool para sa PHP/g)"
+            >
+              <input
+                type="checkbox"
+                checked={s.pricingMode === "derive"}
+                onChange={() => setMode("derive")}
+              />
               <label className="font-medium">Derive from spool</label>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              <Field label={`Spool price (${PHP})`} hint="Total cost of one filament spool (Kung magkano mo nabili ang 1 spool ng filament).">
+              <Field
+                label={`Spool price (${PHP})`}
+                hint="Total cost of one filament spool (Kung magkano mo nabili ang 1 spool ng filament)."
+              >
                 <Num value={s.spoolPrice} onChange={(v) => setS({ ...s, spoolPrice: v })} />
               </Field>
-              <Field label="Spool weight (g)" hint="Weight of the entire spool, usually 1000 g (Bigat ng buong spool, usually 1000 g (1kg)).">
+              <Field
+                label="Spool weight (g)"
+                hint="Weight of the entire spool, usually 1000 g (Bigat ng buong spool, usually 1000 g (1kg))."
+              >
                 <Num value={s.spoolWeight} onChange={(v) => setS({ ...s, spoolWeight: v })} />
               </Field>
             </div>
@@ -654,22 +669,35 @@ export default function App() {
             <div className="my-2 text-center text-xs text-gray-400">— or —</div>
 
             <div className="flex items-center gap-2" title="Use your own PHP/g (Gamitin ang sarili mong PHP/g)">
-              <input type="checkbox" checked={s.pricingMode === "fixed"} onChange={() => setMode("fixed")} />
+              <input
+                type="checkbox"
+                checked={s.pricingMode === "fixed"}
+                onChange={() => setMode("fixed")}
+              />
               <label className="font-medium">Fixed price/gram ({PHP}/g)</label>
             </div>
 
-            <Field label={`Set price (${PHP}/g)`} hint="Your set selling rate per gram (Kung ano yung rate mo per gram).">
+            <Field
+              label={`Set price (${PHP}/g)`}
+              hint="Your set selling rate per gram (Kung ano yung rate mo per gram)."
+            >
               <Num value={s.fixedPerGram} onChange={(v) => setS({ ...s, fixedPerGram: v })} />
             </Field>
 
-            <h3 className="mt-4 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">Usage</h3>
-            <Field label="Filament consumed (g)" hint="From your slicer’s estimate (Mula sa estimate ng slicer. Makikita mo sa preview after mag-slice).">
+            <h3 className="mt-4 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">
+              Usage
+            </h3>
+            <Field
+              label="Filament consumed (g)"
+              hint="From your slicer’s estimate (Mula sa estimate ng slicer. Makikita mo sa preview after mag-slice)."
+            >
               <Num value={s.partWeight} onChange={(v) => setS({ ...s, partWeight: v })} />
             </Field>
 
             <div className="mt-4 rounded bg-yellow-50 p-3 text-sm">
               <strong>
-                Kung nakatulong sa'yo ang calculator na ito, please support me para makagawa pa ako ng mga content na makakatulong sa 3D printing journey mo. Follow me on Youtube, Facebook, TikTok and Instagram.
+                Kung nakatulong sa'yo ang calculator na ito, please support me para makagawa pa ako ng mga content na
+                makakatulong sa 3D printing journey mo. Follow me on Youtube, Facebook, TikTok and Instagram.
               </strong>
             </div>
 
@@ -726,22 +754,46 @@ export default function App() {
           </section>
 
           <section className="col-span-1 space-y-3 rounded-2xl bg-white p-4 shadow">
-            <h2 className="mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">Print & Power</h2>
+            <h2 className="mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">
+              Print & Power
+            </h2>
 
-            <Field label="Print time" hint="Total printing duration (Kabuuang oras ng pagpi-print. Makikita rin sa slicer).">
+            <Field
+              label="Print time"
+              hint="Total printing duration (Kabuuang oras ng pagpi-print. Makikita rin sa slicer)."
+            >
               <div className="grid grid-cols-3 gap-2">
-                <Num value={s.printTimeHours} onChange={(v) => setS({ ...s, printTimeHours: v })} placeholder="Hours" />
-                <Num value={s.printTimeMinutes} onChange={(v) => setS({ ...s, printTimeMinutes: v })} placeholder="Minutes" />
-                <Num value={s.printTimeSeconds} onChange={(v) => setS({ ...s, printTimeSeconds: v })} placeholder="Seconds" />
+                <Num
+                  value={s.printTimeHours}
+                  onChange={(v) => setS({ ...s, printTimeHours: v })}
+                  placeholder="Hours"
+                />
+                <Num
+                  value={s.printTimeMinutes}
+                  onChange={(v) => setS({ ...s, printTimeMinutes: v })}
+                  placeholder="Minutes"
+                />
+                <Num
+                  value={s.printTimeSeconds}
+                  onChange={(v) => setS({ ...s, printTimeSeconds: v })}
+                  placeholder="Seconds"
+                />
               </div>
-              <div className="mt-1 text-xs text-gray-500">Decimal hours used for computation: {pretty(printTimeHoursTotal)} h</div>
+              <div className="mt-1 text-xs text-gray-500">
+                Decimal hours used for computation: {pretty(printTimeHoursTotal)} h
+              </div>
             </Field>
 
-            <Field label={`Electricity price (${PHP}/kWh)`} hint="Your electric rate per kWh (Presyo ng kuryente kada kWh. Check your electricity bill).">
+            <Field
+              label={`Electricity price (${PHP}/kWh)`}
+              hint="Your electric rate per kWh (Presyo ng kuryente kada kWh. Check your electricity bill)."
+            >
               <Num value={s.kwhPrice} onChange={(v) => setS({ ...s, kwhPrice: v })} />
             </Field>
 
-            <div className="mt-3 rounded bg-blue-600 px-3 py-2 text-center text-sm font-bold text-white">Electricity cost mode (3 ways)</div>
+            <div className="mt-3 rounded bg-blue-600 px-3 py-2 text-center text-sm font-bold text-white">
+              Electricity cost mode (3 ways)
+            </div>
 
             <div className="mt-2 flex items-center gap-2" title="Compute using printer wattage and print time">
               <input type="checkbox" checked={modeElec === "wattage"} onChange={() => setElecMode("wattage")} />
@@ -749,7 +801,10 @@ export default function App() {
             </div>
 
             {modeElec === "wattage" && (
-              <Field label="Printer wattage (W)" hint="Average power draw of your printer (Average na konsumo ng kuryente ng machine. I-check sa internet ang specs ng 3D printer mo).">
+              <Field
+                label="Printer wattage (W)"
+                hint="Average power draw of your printer (Average na konsumo ng kuryente ng machine. I-check sa internet ang specs ng 3D printer mo)."
+              >
                 <Num value={s.wattage} onChange={(v) => setS({ ...s, wattage: v })} />
               </Field>
             )}
@@ -778,7 +833,10 @@ export default function App() {
                 </Field>
 
                 {String(s.kwPreset) === "other" && (
-                  <Field label="Custom average power (kW)" hint="Ilagay ang sarili mong kW value (average power) based sa monitoring device mo.">
+                  <Field
+                    label="Custom average power (kW)"
+                    hint="Ilagay ang sarili mong kW value (average power) based sa monitoring device mo."
+                  >
                     <Num value={s.kwCustom} onChange={(v) => setS({ ...s, kwCustom: v })} step={0.001} />
                   </Field>
                 )}
@@ -801,19 +859,29 @@ export default function App() {
             </div>
 
             {modeElec === "php_per_hour" && (
-              <Field label={`Electricity cost per hour (${PHP}/hr)`} hint="Example: ₱5 per hour. Formula: (₱/hr) × (print hours).">
+              <Field
+                label={`Electricity cost per hour (${PHP}/hr)`}
+                hint="Example: ₱5 per hour. Formula: (₱/hr) × (print hours)."
+              >
                 <Num value={s.electricityPhpPerHour} onChange={(v) => setS({ ...s, electricityPhpPerHour: v })} step={0.01} />
               </Field>
             )}
 
-            <h2 className="mt-4 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">Labor (direct cost)</h2>
-            <Field label={`Labor cost (${PHP})`} hint="Your time cost (e.g., cleaning, support removal, post-processing) (Gastos sa oras/paggawa).">
+            <h2 className="mt-4 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">
+              Labor (direct cost)
+            </h2>
+            <Field
+              label={`Labor cost (${PHP})`}
+              hint="Your time cost (e.g., cleaning, support removal, post-processing) (Gastos sa oras/paggawa)."
+            >
               <Num value={s.laborCost} onChange={(v) => setS({ ...s, laborCost: v })} />
             </Field>
           </section>
 
           <section className="col-span-1 space-y-3 rounded-2xl bg-white p-4 shadow">
-            <h2 className="mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">Other Costs</h2>
+            <h2 className="mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">
+              Other Costs
+            </h2>
             <div className="grid grid-cols-2 gap-3">
               <Field label={`Packaging (${PHP})`} hint="Boxes, bubble wrap, labels (Kahon, bubble wrap, label).">
                 <Num value={s.packaging} onChange={(v) => setS({ ...s, packaging: v })} />
@@ -832,39 +900,54 @@ export default function App() {
               </Field>
             </div>
 
-            <h2 className="mt-4 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">Margins</h2>
+            <h2 className="mt-4 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">
+              Margins
+            </h2>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Failure margin (%)" hint="Covers misprints/waste (Isinasaalang-alang ang posibleng misprints/sayang).">
+              <Field
+                label="Failure margin (%)"
+                hint="Covers misprints/waste (Isinasaalang-alang ang posibleng misprints/sayang)."
+              >
                 <Num value={s.failureMarginPct} onChange={(v) => setS({ ...s, failureMarginPct: v })} />
               </Field>
-              <Field label="Profit markup (%)" hint="Your profit on top of costs (Tubong idinadagdag sa lahat ng gastos).">
+              <Field
+                label="Profit markup (%)"
+                hint="Profit markup (%)" hint="Your profit on top of costs (Tubong idinadagdag sa lahat ng gastos)"
+              >
                 <Num value={s.markupPct} onChange={(v) => setS({ ...s, markupPct: v })} />
               </Field>
             </div>
 
-            <h2 className="mt-4 rounded bg-yellow-400 px-3 py-1 text-lg font-bold text-black">Computed Summary</h2>
+            <h2 className="mt-4 rounded bg-yellow-400 px-3 py-1 text-lg font-bold text-black">
+              Computed Summary
+            </h2>
             <div className="space-y-2 rounded-xl border p-3 text-sm">
               <Row label="Price/gram">{PHP} {pretty(pricePerGram)} / g</Row>
               <Row label="Material cost">{PHP} {pretty(materialCost)}</Row>
               <Row label="Electricity cost">{PHP} {pretty(electricityCost)}</Row>
               <Row label="Labor cost">{PHP} {pretty(laborCostNum)}</Row>
-              <Row label="Packaging">{PHP} {pretty(packagingCost)}</Row>
-              <Row label="Paint">{PHP} {pretty(paintCost)}</Row>
-              <Row label="Adhesives">{PHP} {pretty(adhesivesCost)}</Row>
 
               <hr />
 
+              <Row label="CORE cost (mat+elec+labor)">{PHP} {pretty(coreCost)}</Row>
+
+              <hr />
+
+              <Row label="Packaging">{PHP} {pretty(packagingCost)}</Row>
+              <Row label="Paint">{PHP} {pretty(paintCost)}</Row>
+              <Row label="Adhesives">{PHP} {pretty(adhesivesCost)}</Row>
+              <Row label="Shipping fee">{PHP} {pretty(shippingCost)}</Row>
               <Row label="3D modeling fee">{PHP} {pretty(modelingFeeCost)}</Row>
 
               <hr />
 
-              <Row label="Shipping fee">{PHP} {pretty(shippingCost)}</Row>
-
-              <hr />
-
-              <Row label="Subtotal">{PHP} {pretty(baseSubtotal)}</Row>
-              <Row label={`Failure margin (${s.failureMarginPct}%)`}>{PHP} {pretty(failureMarginAmount)}</Row>
-              <Row label={`Mark Up (${s.markupPct}% of subtotal)`}>{PHP} {pretty(markupAmount)}</Row>
+              <Row label="Subtotal (core + other costs)">{PHP} {pretty(baseSubtotal)}</Row>
+              <Row label={`Failure margin (${s.failureMarginPct}% of CORE only)`}>
+                {PHP} {pretty(failureMarginAmount)}
+              </Row>
+              <Row label={`Mark Up (${s.markupPct}% of CORE only)`}>
+                {PHP} {pretty(markupAmount)}
+              </Row>
               <Row label="Final Price" strong>{PHP} {pretty(finalPrice)}</Row>
             </div>
           </section>
@@ -873,7 +956,9 @@ export default function App() {
         <section className="mt-6 rounded-2xl bg-white p-4 shadow">
           <h2 className="mb-2 text-lg font-semibold">Saved Computations (max 3)</h2>
           {!s.saves || s.saves.length === 0 ? (
-            <p className="text-sm text-gray-500">No saves yet. After entering details, click <strong>Save</strong>. (Wala pang save. Maglagay ng detalye at i-click ang <strong>Save</strong>.)</p>
+            <p className="text-sm text-gray-500">
+              No saves yet. After entering details, click <strong>Save</strong>. (Wala pang save. Maglagay ng detalye at i-click ang <strong>Save</strong>.)
+            </p>
           ) : (
             <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
               {s.saves.map((entry, i) => (
@@ -890,11 +975,15 @@ export default function App() {
             </div>
           )}
           <p className="mt-3">
-            <button onClick={downloadAllSaves} className="rounded-2xl border px-3 py-2 text-sm shadow-sm">Download All (.csv)</button>
+            <button onClick={downloadAllSaves} className="rounded-2xl border px-3 py-2 text-sm shadow-sm">
+              Download All (.csv)
+            </button>
           </p>
         </section>
 
-        <footer className="mt-6 text-center text-xs text-gray-500">Built for GitHub Pages · DS3DP v1.5 · PHP only</footer>
+        <footer className="mt-6 text-center text-xs text-gray-500">
+          Built for GitHub Pages · DS3DP v1.5 · PHP only
+        </footer>
       </div>
     </div>
   );
