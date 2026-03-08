@@ -7,13 +7,10 @@ function normalizeUrl(url) {
   return "https://" + u.replace(/^\/+/, "");
 }
 
-// Opens an external link in a new tab/window as reliably as possible.
-// NOTE: For best popup-blocker behavior, call this directly inside a click handler.
 function openExternal(rawUrl) {
   const u = normalizeUrl(rawUrl);
   if (!u) return;
 
-  // 1) Try window.open first (often the most "user-gesture" friendly).
   try {
     const w = window.open(u, "_blank", "noopener,noreferrer");
     if (w) {
@@ -24,7 +21,6 @@ function openExternal(rawUrl) {
     }
   } catch {}
 
-  // 2) Fallback: synthetic anchor click
   try {
     const a = document.createElement("a");
     a.href = u;
@@ -38,7 +34,6 @@ function openExternal(rawUrl) {
     return;
   } catch {}
 
-  // 3) Last resort: same-tab navigation
   window.location.href = u;
 }
 
@@ -80,8 +75,8 @@ const KW_PRESETS = [
 const HELP_KW_HINT =
   "Pumili ng printer model sa listahan. Lahat ng nasa listahan ay based sa readings ng aking monitoring device at approximate lang. Kung wala ang printer mo sa list, piliin ang Other at maglagay ng sarili mong kW value.";
 
-const STORAGE_KEY = "ds3dpc_v1_5";
-const WIPE_ONCE_KEY = "ds3dpc_v1_5_wiped_once";
+const STORAGE_KEY = "ds3dpc_v1_6";
+const WIPE_ONCE_KEY = "ds3dpc_v1_6_wiped_once";
 
 const INITIAL_STATE = {
   label: "Dr Shiela 3D Prints 3D Printing Calculator",
@@ -111,6 +106,7 @@ const INITIAL_STATE = {
   laborCost: 0,
 
   packaging: 0,
+  accessories: 0,
   paint: 0,
   adhesives: 0,
   shipping: 0,
@@ -127,6 +123,33 @@ const INITIAL_STATE = {
 
   saves: [],
   productName: "",
+};
+
+const RESET_STATE = {
+  ...INITIAL_STATE,
+  spoolPrice: 0,
+  spoolWeight: 1000,
+  fixedPerGram: 0,
+  partWeight: "",
+  printTimeHours: 0,
+  printTimeMinutes: 0,
+  printTimeSeconds: 0,
+  wattage: 0,
+  kwPreset: "other",
+  kwCustom: "",
+  kwhPrice: 0,
+  electricityPhpPerHour: 0,
+  laborCost: 0,
+  packaging: 0,
+  accessories: 0,
+  paint: 0,
+  adhesives: 0,
+  shipping: 0,
+  modelingFee: 0,
+  failureMarginPct: 0,
+  markupPct: 0,
+  productName: "",
+  saves: [],
 };
 
 async function fetchCountApiValue(url, timeoutMs = 4000) {
@@ -168,7 +191,6 @@ function ExternalLink({ href, className, title, children }) {
       target="_blank"
       rel="noopener noreferrer"
       onClick={(e) => {
-        // Force the open to happen from the direct user click.
         e.preventDefault();
         openExternal(href);
       }}
@@ -183,22 +205,18 @@ function ExternalLink({ href, className, title, children }) {
 export default function App() {
   const [s, setS] = usePersistedState(STORAGE_KEY, INITIAL_STATE);
 
-  // v1.5 hard reset (wipe old saved state) — runs once per browser/device.
   useEffect(() => {
     try {
       const already = localStorage.getItem(WIPE_ONCE_KEY);
       if (already === "1") return;
 
-      // Wipe both old and new keys so social links + fields reset to v1.5 defaults.
       localStorage.removeItem("ds3dpc_v1_4");
       localStorage.removeItem("ds3dpc_v1_5");
+      localStorage.removeItem("ds3dpc_v1_6");
       localStorage.setItem(WIPE_ONCE_KEY, "1");
 
-      // Force React state to v1.5 defaults.
       setS(INITIAL_STATE);
-    } catch {
-      // If storage is blocked, we just continue.
-    }
+    } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -210,7 +228,7 @@ export default function App() {
 
     (async () => {
       const value = await fetchCountApiValue(
-        "https://api.countapi.xyz/hit/drshiela3dprints/ds3dpc-v1-5",
+        "https://api.countapi.xyz/hit/drshiela3dprints/ds3dpc-v1-6",
         4000
       );
       if (!mounted) return;
@@ -264,26 +282,23 @@ export default function App() {
   }
 
   const packagingCost = Number(s.packaging) || 0;
+  const accessoriesCost = Number(s.accessories) || 0;
   const paintCost = Number(s.paint) || 0;
   const adhesivesCost = Number(s.adhesives) || 0;
   const shippingCost = Number(s.shipping) || 0;
   const modelingFeeCost = Number(s.modelingFee) || 0;
   const laborCostNum = Number(s.laborCost) || 0;
 
-  // ✅ CORE COST (ONLY THESE AFFECT FAILURE + MARKUP)
   const coreCost = materialCost + electricityCost + laborCostNum;
 
-  // Other costs (pass-through / add-ons) — DO NOT affect failure margin or markup
   const otherCosts =
-    packagingCost + paintCost + adhesivesCost + shippingCost + modelingFeeCost;
+    packagingCost + accessoriesCost + paintCost + adhesivesCost + shippingCost + modelingFeeCost;
 
   const baseSubtotal = coreCost + otherCosts;
 
-  // ✅ Failure margin applies ONLY to coreCost
   const failureMarginRate = Number(s.failureMarginPct) || 0;
   const failureMarginAmount = coreCost * (failureMarginRate / 100);
 
-  // ✅ Markup applies ONLY to coreCost
   const markupRate = Number(s.markupPct) || 0;
   const markupAmount = coreCost * (markupRate / 100);
 
@@ -295,11 +310,11 @@ export default function App() {
     );
     if (!ok) return;
     try {
-      // Clear both old and new storage keys to truly reset
       localStorage.removeItem("ds3dpc_v1_4");
       localStorage.removeItem("ds3dpc_v1_5");
+      localStorage.removeItem("ds3dpc_v1_6");
     } catch {}
-    setS(INITIAL_STATE);
+    setS(RESET_STATE);
   };
 
   const setMode = (mode) => setS({ ...s, pricingMode: mode });
@@ -321,6 +336,7 @@ export default function App() {
     "Electricity ₱/hr",
     "Labor Cost",
     "Packaging",
+    "Accessories",
     "Paint",
     "Adhesives",
     "Shipping",
@@ -330,7 +346,7 @@ export default function App() {
     "Price/gram",
     "Material Cost",
     "Electricity Cost",
-    "Other Costs (pkg+paint+adh+ship+3D)",
+    "Other Costs (pkg+acc+paint+adh+ship+3D)",
     "Core Cost (mat+elec+labor)",
     "Subtotal (core+others)",
     "Failure Amount (core only)",
@@ -382,6 +398,7 @@ export default function App() {
     }
 
     const pkg = Number(d.packaging) || 0;
+    const acc = Number(d.accessories) || 0;
     const paint = Number(d.paint) || 0;
     const adh = Number(d.adhesives) || 0;
     const ship = Number(d.shipping) || 0;
@@ -389,7 +406,7 @@ export default function App() {
     const labor = Number(d.laborCost) || 0;
 
     const core = mat + elec + labor;
-    const others = pkg + paint + adh + ship + model;
+    const others = pkg + acc + paint + adh + ship + model;
     const sub = core + others;
 
     const fmRate = Number(d.failureMarginPct) || 0;
@@ -416,6 +433,7 @@ export default function App() {
       phpPerHourCsv === "" ? "" : phpPerHourCsv,
       Number(d.laborCost) || 0,
       pkg,
+      acc,
       paint,
       adh,
       ship,
@@ -521,14 +539,15 @@ export default function App() {
           ...INITIAL_STATE,
           pricingMode: "fixed",
           fixedPerGram: 2,
-          partWeight: 10, // mat = 20
+          partWeight: 10,
           printTimeHours: 1,
           printTimeMinutes: 0,
           printTimeSeconds: 0,
           electricityMode: "php_per_hour",
-          electricityPhpPerHour: 5, // elec = 5
-          laborCost: 15, // labor = 15
+          electricityPhpPerHour: 5,
+          laborCost: 15,
           packaging: 100,
+          accessories: 75,
           paint: 50,
           adhesives: 25,
           shipping: 200,
@@ -557,18 +576,18 @@ export default function App() {
       const finVal = parseFloat(cells[idxFin]);
 
       // core = 20 + 5 + 15 = 40
-      // others = 100+50+25+200+300=675
-      // sub = 715
+      // others = 100+75+50+25+200+300 = 750
+      // sub = 790
       // fm = 4
       // mu = 8
-      // fin = 727
+      // fin = 802
       if (Math.abs(coreVal - 40) > 0.01) throw new Error("Core calc failed");
-      if (Math.abs(subVal - 715) > 0.01) throw new Error("Subtotal calc failed");
+      if (Math.abs(subVal - 790) > 0.01) throw new Error("Subtotal calc failed");
       if (Math.abs(fmVal - 4) > 0.01) throw new Error("Failure calc failed");
       if (Math.abs(muVal - 8) > 0.01) throw new Error("Markup calc failed");
-      if (Math.abs(finVal - 727) > 0.01) throw new Error("Final calc failed");
+      if (Math.abs(finVal - 802) > 0.01) throw new Error("Final calc failed");
 
-      alert("Self-test passed: Failure + Markup apply to CORE only (mat+elec+labor).");
+      alert("Self-test passed: Failure + Markup apply to CORE only, and Accessories is treated as pass-through.");
     } catch (e) {
       alert("Self-test FAILED: " + (e && e.message ? e.message : String(e)));
     }
@@ -581,7 +600,7 @@ export default function App() {
           <div>
             <h1 className="text-2xl font-bold">Dr Shiela 3D Prints 3D Printing Calculator 🇵🇭</h1>
             <p className="text-sm text-gray-600">
-              Version 1.5 · PHP-only · Persists on refresh · Hover labels for English/Tagalog help.
+              Version 1.6 · PHP-only · Persists on refresh · Hover labels for English/Tagalog help.
             </p>
           </div>
 
@@ -624,7 +643,7 @@ export default function App() {
             </button>
             <button
               onClick={resetEverything}
-              className="rounded-2xl border px-3 py-2 text-sm shadow-sm text-red-700"
+              className="rounded-2xl border px-3 py-2 text-sm text-red-700 shadow-sm"
               title="Clears all fields + saves"
             >
               Reset Everything
@@ -886,6 +905,12 @@ export default function App() {
               <Field label={`Packaging (${PHP})`} hint="Boxes, bubble wrap, labels (Kahon, bubble wrap, label).">
                 <Num value={s.packaging} onChange={(v) => setS({ ...s, packaging: v })} />
               </Field>
+              <Field
+                label={`Accessories (${PHP})`}
+                hint="Keyring, beadchain, strap, lanyard, hook, and other add-ons."
+              >
+                <Num value={s.accessories} onChange={(v) => setS({ ...s, accessories: v })} />
+              </Field>
               <Field label={`Paint (${PHP})`} hint="Paints, primers, sealers (Pintura, primer, sealer).">
                 <Num value={s.paint} onChange={(v) => setS({ ...s, paint: v })} />
               </Field>
@@ -912,7 +937,7 @@ export default function App() {
               </Field>
               <Field
                 label="Profit markup (%)"
-                hint="Profit markup (%)" hint="Your profit on top of costs (Tubong idinadagdag sa lahat ng gastos)"
+                hint="Your profit on top of CORE cost only (Tubong idinadagdag sa CORE cost lang)."
               >
                 <Num value={s.markupPct} onChange={(v) => setS({ ...s, markupPct: v })} />
               </Field>
@@ -934,6 +959,7 @@ export default function App() {
               <hr />
 
               <Row label="Packaging">{PHP} {pretty(packagingCost)}</Row>
+              <Row label="Accessories">{PHP} {pretty(accessoriesCost)}</Row>
               <Row label="Paint">{PHP} {pretty(paintCost)}</Row>
               <Row label="Adhesives">{PHP} {pretty(adhesivesCost)}</Row>
               <Row label="Shipping fee">{PHP} {pretty(shippingCost)}</Row>
@@ -982,7 +1008,7 @@ export default function App() {
         </section>
 
         <footer className="mt-6 text-center text-xs text-gray-500">
-          Built for GitHub Pages · DS3DP v1.5 · PHP only
+          Built for GitHub Pages · DS3DP v1.6 · PHP only
         </footer>
       </div>
     </div>
