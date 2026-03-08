@@ -75,45 +75,46 @@ const KW_PRESETS = [
 const HELP_KW_HINT =
   "Pumili ng printer model sa listahan. Lahat ng nasa listahan ay based sa readings ng aking monitoring device at approximate lang. Kung wala ang printer mo sa list, piliin ang Other at maglagay ng sarili mong kW value.";
 
-const STORAGE_KEY = "ds3dpc_v1_6";
-const WIPE_ONCE_KEY = "ds3dpc_v1_6_wiped_once";
+const STORAGE_KEY = "ds3dpc_v1_7";
+const WIPE_ONCE_KEY = "ds3dpc_v1_7_wiped_once";
 
 const INITIAL_STATE = {
   label: "Dr Shiela 3D Prints 3D Printing Calculator",
 
   pricingMode: "derive",
-  spoolPrice: 800,
+  spoolPrice: 0,
   spoolWeight: 1000,
-  fixedPerGram: 2.0,
+  fixedPerGram: 0,
 
   partWeight: "",
 
-  printTimeHours: 6,
+  printTimeHours: 0,
   printTimeMinutes: 0,
   printTimeSeconds: 0,
 
   electricityMode: "wattage",
 
-  wattage: 120,
+  wattage: 0,
 
-  kwPreset: "creality_hi",
+  kwPreset: "other",
   kwCustom: "",
 
-  kwhPrice: 12,
+  kwhPrice: 0,
 
-  electricityPhpPerHour: 5,
+  electricityPhpPerHour: 0,
 
   laborCost: 0,
 
   packaging: 0,
-  accessories: 0,
+  accessory1: 0,
+  accessory2: 0,
   paint: 0,
   adhesives: 0,
   shipping: 0,
   modelingFee: 0,
 
-  failureMarginPct: 10,
-  markupPct: 20,
+  failureMarginPct: 0,
+  markupPct: 0,
 
   facebookUrl: "https://www.facebook.com/drshiela3dprintspage",
   youtubeUrl: "https://www.youtube.com/@DrShiela3DPrints",
@@ -127,29 +128,6 @@ const INITIAL_STATE = {
 
 const RESET_STATE = {
   ...INITIAL_STATE,
-  spoolPrice: 0,
-  spoolWeight: 1000,
-  fixedPerGram: 0,
-  partWeight: "",
-  printTimeHours: 0,
-  printTimeMinutes: 0,
-  printTimeSeconds: 0,
-  wattage: 0,
-  kwPreset: "other",
-  kwCustom: "",
-  kwhPrice: 0,
-  electricityPhpPerHour: 0,
-  laborCost: 0,
-  packaging: 0,
-  accessories: 0,
-  paint: 0,
-  adhesives: 0,
-  shipping: 0,
-  modelingFee: 0,
-  failureMarginPct: 0,
-  markupPct: 0,
-  productName: "",
-  saves: [],
 };
 
 async function fetchCountApiValue(url, timeoutMs = 4000) {
@@ -213,6 +191,8 @@ export default function App() {
       localStorage.removeItem("ds3dpc_v1_4");
       localStorage.removeItem("ds3dpc_v1_5");
       localStorage.removeItem("ds3dpc_v1_6");
+      localStorage.removeItem("ds3dpc_v1_7");
+      localStorage.removeItem("ds3dpc_v1_7");
       localStorage.setItem(WIPE_ONCE_KEY, "1");
 
       setS(INITIAL_STATE);
@@ -228,7 +208,7 @@ export default function App() {
 
     (async () => {
       const value = await fetchCountApiValue(
-        "https://api.countapi.xyz/hit/drshiela3dprints/ds3dpc-v1-6",
+        "https://api.countapi.xyz/hit/drshiela3dprints/ds3dpc-v1-7",
         4000
       );
       if (!mounted) return;
@@ -282,7 +262,8 @@ export default function App() {
   }
 
   const packagingCost = Number(s.packaging) || 0;
-  const accessoriesCost = Number(s.accessories) || 0;
+  const accessory1Cost = Number(s.accessory1) || 0;
+  const accessory2Cost = Number(s.accessory2) || 0;
   const paintCost = Number(s.paint) || 0;
   const adhesivesCost = Number(s.adhesives) || 0;
   const shippingCost = Number(s.shipping) || 0;
@@ -292,7 +273,7 @@ export default function App() {
   const coreCost = materialCost + electricityCost + laborCostNum;
 
   const otherCosts =
-    packagingCost + accessoriesCost + paintCost + adhesivesCost + shippingCost + modelingFeeCost;
+    packagingCost + accessory1Cost + accessory2Cost + paintCost + adhesivesCost + shippingCost + modelingFeeCost;
 
   const baseSubtotal = coreCost + otherCosts;
 
@@ -336,7 +317,8 @@ export default function App() {
     "Electricity ₱/hr",
     "Labor Cost",
     "Packaging",
-    "Accessories",
+    "Accessory 1",
+    "Accessory 2",
     "Paint",
     "Adhesives",
     "Shipping",
@@ -346,7 +328,7 @@ export default function App() {
     "Price/gram",
     "Material Cost",
     "Electricity Cost",
-    "Other Costs (pkg+acc+paint+adh+ship+3D)",
+    "Other Costs (pkg+acc1+acc2+paint+adh+ship+3D)",
     "Core Cost (mat+elec+labor)",
     "Subtotal (core+others)",
     "Failure Amount (core only)",
@@ -398,7 +380,8 @@ export default function App() {
     }
 
     const pkg = Number(d.packaging) || 0;
-    const acc = Number(d.accessories) || 0;
+    const acc1 = Number(d.accessory1) || 0;
+    const acc2 = Number(d.accessory2) || 0;
     const paint = Number(d.paint) || 0;
     const adh = Number(d.adhesives) || 0;
     const ship = Number(d.shipping) || 0;
@@ -406,7 +389,7 @@ export default function App() {
     const labor = Number(d.laborCost) || 0;
 
     const core = mat + elec + labor;
-    const others = pkg + acc + paint + adh + ship + model;
+    const others = pkg + acc1 + acc2 + paint + adh + ship + model;
     const sub = core + others;
 
     const fmRate = Number(d.failureMarginPct) || 0;
@@ -433,7 +416,8 @@ export default function App() {
       phpPerHourCsv === "" ? "" : phpPerHourCsv,
       Number(d.laborCost) || 0,
       pkg,
-      acc,
+      acc1,
+      acc2,
       paint,
       adh,
       ship,
@@ -547,7 +531,8 @@ export default function App() {
           electricityPhpPerHour: 5,
           laborCost: 15,
           packaging: 100,
-          accessories: 75,
+          accessory1: 75,
+          accessory2: 25,
           paint: 50,
           adhesives: 25,
           shipping: 200,
@@ -576,18 +561,18 @@ export default function App() {
       const finVal = parseFloat(cells[idxFin]);
 
       // core = 20 + 5 + 15 = 40
-      // others = 100+75+50+25+200+300 = 750
-      // sub = 790
+      // others = 100+75+25+50+25+200+300 = 775
+      // sub = 815
       // fm = 4
       // mu = 8
-      // fin = 802
+      // fin = 827
       if (Math.abs(coreVal - 40) > 0.01) throw new Error("Core calc failed");
-      if (Math.abs(subVal - 790) > 0.01) throw new Error("Subtotal calc failed");
+      if (Math.abs(subVal - 815) > 0.01) throw new Error("Subtotal calc failed");
       if (Math.abs(fmVal - 4) > 0.01) throw new Error("Failure calc failed");
       if (Math.abs(muVal - 8) > 0.01) throw new Error("Markup calc failed");
-      if (Math.abs(finVal - 802) > 0.01) throw new Error("Final calc failed");
+      if (Math.abs(finVal - 827) > 0.01) throw new Error("Final calc failed");
 
-      alert("Self-test passed: Failure + Markup apply to CORE only, and Accessories is treated as pass-through.");
+      alert("Self-test passed: Failure + Markup apply to CORE only, and Accessory 1 and Accessory 2 are treated as pass-through." );
     } catch (e) {
       alert("Self-test FAILED: " + (e && e.message ? e.message : String(e)));
     }
@@ -600,7 +585,7 @@ export default function App() {
           <div>
             <h1 className="text-2xl font-bold">Dr Shiela 3D Prints 3D Printing Calculator 🇵🇭</h1>
             <p className="text-sm text-gray-600">
-              Version 1.6 · PHP-only · Persists on refresh · Hover labels for English/Tagalog help.
+              Version 1.7 · PHP-only · Persists on refresh · Hover labels for English/Tagalog help.
             </p>
           </div>
 
@@ -651,7 +636,7 @@ export default function App() {
           </div>
         </header>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
           <section className="col-span-1 space-y-3 rounded-2xl bg-white p-4 shadow">
             <h2 className="mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white">
               Material Cost
@@ -782,21 +767,30 @@ export default function App() {
               hint="Total printing duration (Kabuuang oras ng pagpi-print. Makikita rin sa slicer)."
             >
               <div className="grid grid-cols-3 gap-2">
-                <Num
-                  value={s.printTimeHours}
-                  onChange={(v) => setS({ ...s, printTimeHours: v })}
-                  placeholder="Hours"
-                />
-                <Num
-                  value={s.printTimeMinutes}
-                  onChange={(v) => setS({ ...s, printTimeMinutes: v })}
-                  placeholder="Minutes"
-                />
-                <Num
-                  value={s.printTimeSeconds}
-                  onChange={(v) => setS({ ...s, printTimeSeconds: v })}
-                  placeholder="Seconds"
-                />
+                <div>
+                  <label className="mb-1 block text-xs text-gray-500">Hour</label>
+                  <Num
+                    value={s.printTimeHours}
+                    onChange={(v) => setS({ ...s, printTimeHours: v })}
+                    placeholder="Hour"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-gray-500">Min</label>
+                  <Num
+                    value={s.printTimeMinutes}
+                    onChange={(v) => setS({ ...s, printTimeMinutes: v })}
+                    placeholder="Min"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-gray-500">Sec</label>
+                  <Num
+                    value={s.printTimeSeconds}
+                    onChange={(v) => setS({ ...s, printTimeSeconds: v })}
+                    placeholder="Sec"
+                  />
+                </div>
               </div>
               <div className="mt-1 text-xs text-gray-500">
                 Decimal hours used for computation: {pretty(printTimeHoursTotal)} h
@@ -906,10 +900,16 @@ export default function App() {
                 <Num value={s.packaging} onChange={(v) => setS({ ...s, packaging: v })} />
               </Field>
               <Field
-                label={`Accessories (${PHP})`}
-                hint="Keyring, beadchain, strap, lanyard, hook, and other add-ons."
+                label={`Accessory 1 (${PHP})`}
+                hint="Example: keyring, beadchain, strap, lanyard, hook, and other add-ons."
               >
-                <Num value={s.accessories} onChange={(v) => setS({ ...s, accessories: v })} />
+                <Num value={s.accessory1} onChange={(v) => setS({ ...s, accessory1: v })} />
+              </Field>
+              <Field
+                label={`Accessory 2 (${PHP})`}
+                hint="Second accessory cost if may hiwalay ka pang add-on."
+              >
+                <Num value={s.accessory2} onChange={(v) => setS({ ...s, accessory2: v })} />
               </Field>
               <Field label={`Paint (${PHP})`} hint="Paints, primers, sealers (Pintura, primer, sealer).">
                 <Num value={s.paint} onChange={(v) => setS({ ...s, paint: v })} />
@@ -942,8 +942,10 @@ export default function App() {
                 <Num value={s.markupPct} onChange={(v) => setS({ ...s, markupPct: v })} />
               </Field>
             </div>
+          </section>
 
-            <h2 className="mt-4 rounded bg-yellow-400 px-3 py-1 text-lg font-bold text-black">
+          <section className="col-span-1 space-y-3 rounded-2xl bg-white p-4 shadow">
+            <h2 className="mt-0 rounded bg-yellow-400 px-3 py-1 text-lg font-bold text-black">
               Computed Summary
             </h2>
             <div className="space-y-2 rounded-xl border p-3 text-sm">
@@ -959,7 +961,8 @@ export default function App() {
               <hr />
 
               <Row label="Packaging">{PHP} {pretty(packagingCost)}</Row>
-              <Row label="Accessories">{PHP} {pretty(accessoriesCost)}</Row>
+              <Row label="Accessory 1">{PHP} {pretty(accessory1Cost)}</Row>
+              <Row label="Accessory 2">{PHP} {pretty(accessory2Cost)}</Row>
               <Row label="Paint">{PHP} {pretty(paintCost)}</Row>
               <Row label="Adhesives">{PHP} {pretty(adhesivesCost)}</Row>
               <Row label="Shipping fee">{PHP} {pretty(shippingCost)}</Row>
@@ -1008,7 +1011,7 @@ export default function App() {
         </section>
 
         <footer className="mt-6 text-center text-xs text-gray-500">
-          Built for GitHub Pages · DS3DP v1.6 · PHP only
+          Built for GitHub Pages · DS3DP v1.7 · PHP only
         </footer>
       </div>
     </div>
