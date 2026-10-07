@@ -1,14 +1,1212 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Dr Shiela 3D Prints 3D Printing Calculator</title>
-    <!-- Tailwind Play CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script type="module" crossorigin src="/DrShiela3DPrintsCalculator/assets/index-C1NwUaC_.js"></script>
-  </head>
-  <body class="bg-gray-50">
-    <div id="root"></div>
-  </body>
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DrShiela3DPrints Calculator</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<style>
+body{margin:0;background:#f9fafb}
+#boot{padding:24px;font-family:Arial,sans-serif;color:#374151}
+
+/* v1.8 help additions only — original calculator layout/styles remain unchanged */
+.ds-help-wrap{position:relative;display:inline-flex;align-items:center;margin-left:5px;vertical-align:middle}
+.ds-help-btn{width:18px;height:18px;min-width:18px;border:1px solid #d1d5db;border-radius:9999px;background:#fff;color:#6b7280;font-size:11px;font-weight:700;line-height:16px;text-align:center;padding:0;cursor:pointer}
+.ds-help-btn:hover,.ds-help-btn:focus{background:#f3f4f6;color:#111827;outline:none}
+.ds-help-pop{display:none;position:absolute;left:0;top:24px;z-index:80;width:310px;max-width:78vw;padding:10px 12px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;box-shadow:0 10px 25px rgba(0,0,0,.14);font-size:12px;font-weight:400;line-height:1.45;color:#374151}
+.ds-help-wrap:hover .ds-help-pop,.ds-help-wrap:focus-within .ds-help-pop,.ds-help-wrap.ds-open .ds-help-pop{display:block}
+.ds-help-pop b{color:#111827}
+@media(max-width:640px){
+.ds-help-pop{position:fixed;left:16px;right:16px;top:auto;bottom:72px;width:auto;max-width:none}
+.ds-desktop-links{display:none!important}
+.ds-mobile-links{display:block!important}
+}
+@media(min-width:641px){
+.ds-mobile-links{display:none!important}
+}
+</style>
+</head>
+<body>
+<div id="boot">Loading calculator…</div>
+<div id="root"></div>
+<script>
+window.addEventListener("error",function(e){
+  var b=document.getElementById("boot");
+  if(b) b.textContent="Calculator could not start: "+(e.message||"script error");
+});
+</script>
+<script>
+const { useEffect, useMemo, useRef, useState } = React;
+function normalizeUrl(url) {
+    const u = String(url || "").trim();
+    if (!u)
+        return "";
+    if (/^https?:\/\//i.test(u))
+        return u;
+    return "https://" + u.replace(/^\/+/, "");
+}
+function openExternal(rawUrl) {
+    const u = normalizeUrl(rawUrl);
+    if (!u)
+        return;
+    try {
+        const w = window.open(u, "_blank", "noopener,noreferrer");
+        if (w) {
+            try {
+                w.opener = null;
+            }
+            catch (_a) { }
+            return;
+        }
+    }
+    catch (_b) { }
+    try {
+        const a = document.createElement("a");
+        a.href = u;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.referrerPolicy = "no-referrer";
+        a.style.display = "none";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        return;
+    }
+    catch (_c) { }
+    window.location.href = u;
+}
+function pretty(num) {
+    if (num === undefined || num === null || Number.isNaN(num))
+        return "—";
+    return Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(num);
+}
+function usePersistedState(key, initial) {
+    const [state, setState] = useState(() => {
+        try {
+            const saved = localStorage.getItem(key);
+            return saved ? JSON.parse(saved) : initial;
+        }
+        catch (_a) {
+            return initial;
+        }
+    });
+    useEffect(() => {
+        try {
+            localStorage.setItem(key, JSON.stringify(state));
+        }
+        catch (_a) { }
+    }, [key, state]);
+    return [state, setState];
+}
+const KW_PRESETS = [
+    { key: "creality_hi", label: "Creality Hi PLA — 0.129 kW", kw: 0.129 },
+    { key: "creality_k2pro", label: "Creality K2 Pro PLA — 0.183 kW", kw: 0.183 },
+    { key: "bambu_a1mini", label: "Bambu Lab A1 Mini PLA — ~0.077 kW", kw: 0.077 },
+    { key: "bambu_a1", label: "Bambu Lab A1 PLA — ~0.093 kW", kw: 0.093 },
+    { key: "bambu_p1s", label: "Bambu Lab P1S PLA — 0.10 kW", kw: 0.1 },
+    { key: "bambu_h2s", label: "Bambu Lab H2S PLA — 0.175 kW", kw: 0.175 },
+    { key: "bambu_h2c", label: "Bambu Lab H2C PLA — 0.128 kW", kw: 0.128 },
+    { key: "other", label: "Other (Custom kW)", kw: null },
+];
+const CURRENCIES = [
+    { code: "PHP", symbol: "₱", label: "₱ PHP" }, { code: "USD", symbol: "$", label: "$ USD" },
+    { code: "EUR", symbol: "€", label: "€ EUR" }, { code: "GBP", symbol: "£", label: "£ GBP" },
+    { code: "JPY", symbol: "¥", label: "¥ JPY" }, { code: "KRW", symbol: "₩", label: "₩ KRW" },
+    { code: "SGD", symbol: "S$", label: "S$ SGD" }, { code: "AUD", symbol: "A$", label: "A$ AUD" },
+    { code: "CAD", symbol: "C$", label: "C$ CAD" },
+];
+const ACCESSORY_TYPES = ["Switch", "Keyring", "Jump ring", "Carabiner", "Paracord", "Ball chain", "Gems", "Magnet", "Screws/Hardware", "LED/Electronics", "Hook/Clip", "Ribbon/String", "Chain", "Others"];
+const HELP_KW_HINT = "Pumili ng printer model sa listahan. Lahat ng nasa listahan ay based sa readings ng aking monitoring device at approximate lang. Kung wala ang printer mo sa list, piliin ang Other at maglagay ng sarili mong kW value.";
+const STORAGE_KEY = "ds3dpc_v1_7";
+const WIPE_ONCE_KEY = "ds3dpc_v1_7_wiped_once";
+const INITIAL_STATE = {
+    label: "Dr Shiela 3D Prints 3D Printing Calculator",
+    currency: "PHP",
+    accessories: [],
+    pricingMode: "derive",
+    spoolPrice: 0,
+    spoolWeight: 1000,
+    fixedPerGram: 0,
+    partWeight: "",
+    printTimeHours: 0,
+    printTimeMinutes: 0,
+    printTimeSeconds: 0,
+    electricityMode: "wattage",
+    wattage: 0,
+    kwPreset: "other",
+    kwCustom: "",
+    kwhPrice: 0,
+    electricityPhpPerHour: 0,
+    laborCost: 0,
+    packaging: 0,
+    accessory1: 0,
+    accessory2: 0,
+    paint: 0,
+    adhesives: 0,
+    shipping: 0,
+    modelingFee: 0,
+    failureMarginPct: 0,
+    markupPct: 0,
+    facebookUrl: "https://www.facebook.com/drshiela3dprintspage",
+    youtubeUrl: "https://www.youtube.com/@DrShiela3DPrints",
+    tiktokUrl: "https://www.tiktok.com/@drshiela3dprints",
+    instagramUrl: "https://www.instagram.com/drshiela3dprints",
+    tapoUrl: "https://s.shopee.ph/AABsL1KL7t",
+    saves: [],
+    productName: "",
+    createdAt: "",
+};
+const RESET_STATE = {
+    ...INITIAL_STATE,
+};
+async function fetchCountApiValue(url, timeoutMs = 4000) {
+    if (typeof fetch !== "function")
+        return null;
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
+    try {
+        const res = await fetch(url, {
+            method: "GET",
+            cache: "no-store",
+            signal: controller ? controller.signal : undefined,
+        });
+        if (!res || !res.ok)
+            return null;
+        const text = await res.text();
+        if (!text)
+            return null;
+        try {
+            const data = JSON.parse(text);
+            return typeof data.value === "number" ? data.value : null;
+        }
+        catch (_a) {
+            return null;
+        }
+    }
+    catch (_b) {
+        return null;
+    }
+    finally {
+        if (timer)
+            window.clearTimeout(timer);
+    }
+}
+function ExternalLink({ href, className, title, children }) {
+    const safeHref = normalizeUrl(href);
+    return (React.createElement("a", { href: safeHref, target: "_blank", rel: "noopener noreferrer", onClick: (e) => {
+            e.preventDefault();
+            openExternal(href);
+        }, className: className, title: title }, children));
+}
+
+const CALCULATOR_GUIDE = [
+    ["Product Name","Identifies this calculation and is used in exported file names.","Pangalan ng product na kino-compute mo at gagamitin din sa pangalan ng exported files."],
+    ["Currency","Choose the currency symbol used by the calculator. This does not convert exchange rates.","Piliin ang currency na gagamitin sa presyo. Hindi ito automatic currency conversion."],
+    ["Product Files","JSON keeps an editable project. PNG, PDF, and CSV keep product computation records.","Ang JSON ay editable project file. Ang PNG, PDF, at CSV ay records ng computation ng product."],
+    ["Derive from spool","Uses the spool price and spool weight to calculate the filament price per gram.","Kinukuha ang price per gram gamit ang presyo at bigat ng buong spool."],
+    ["Spool price","Total cost of one filament spool.","Kabuuang presyo ng isang spool ng filament."],
+    ["Spool weight","Weight of the entire spool, usually 1000 g for a 1 kg spool.","Bigat ng buong spool, kadalasan 1000 g para sa 1 kg spool."],
+    ["Fixed price/gram","Use your own fixed price per gram instead of deriving it from the spool.","Gamitin ang sarili mong fixed na presyo kada gram imbes na i-compute mula sa spool."],
+    ["Set price","Your chosen fixed rate per gram.","Sarili mong itinakdang presyo kada gram."],
+    ["Filament consumed","Filament used by the model, based on your slicer's estimate after slicing.","Dami ng filament na nagamit ayon sa estimate ng slicer pagkatapos mag-slice."],
+    ["Print time","Total printing duration. You can get this from your slicer.","Kabuuang oras ng pag-print. Makikita ito sa slicer."],
+    ["Electricity price","Your electricity rate per kWh. Check your electricity bill.","Presyo ng kuryente kada kWh. Makikita ito sa electricity bill."],
+    ["Printer wattage","Average power draw of your printer in watts.","Average na konsumo ng kuryente ng printer sa watts."],
+    ["Average energy (kW)","Uses an average kW reading from a monitoring device to estimate electricity cost.","Gumagamit ng average kW reading mula sa monitoring device para ma-estimate ang gastos sa kuryente."],
+    ["Printer model (kW)","Choose a printer preset based on monitoring-device readings. Values are approximate; use Other for your own measured kW.","Pumili ng printer preset base sa monitoring-device readings. Approximate lang ang values; piliin ang Other kung may sarili kang measured kW."],
+    ["Electricity cost per hour","Use a fixed electricity cost for every hour of printing.","Gumamit ng fixed na gastos sa kuryente kada oras ng pag-print."],
+    ["Labor cost","Your direct time cost for cleaning, support removal, post-processing, assembly, or similar work.","Bayad sa oras/paggawa gaya ng cleaning, support removal, post-processing, assembly, at iba pa."],
+    ["Packaging","Boxes, bubble wrap, labels, and other packaging materials.","Kahon, bubble wrap, labels, at iba pang packaging materials."],
+    ["Accessories","Extra parts used for the product, such as switches, keyrings, jump rings, carabiners, paracord, ball chains, gems, magnets, hardware, LEDs/electronics, hooks, clips, ribbons, or chains.","Mga extra na piyesa gaya ng switch, keyring, jump ring, carabiner, paracord, ball chain, gems, magnet, hardware, LED/electronics, hook, clip, ribbon, o chain."],
+    ["Paint","Paints, primers, sealers, and similar finishing materials.","Pintura, primer, sealer, at ibang finishing materials."],
+    ["Adhesives","Glue, epoxy, CA glue, tape, and similar materials.","Pandikit gaya ng glue, epoxy, CA glue, tape, at iba pa."],
+    ["Shipping","Courier or delivery cost included in the product computation.","Bayad sa courier o delivery na isinasama sa computation."],
+    ["3D modeling fee","Fee for 3D design or modeling work.","Bayad para sa 3D design o modeling work."],
+    ["Failure margin","Allowance for possible failed prints or production waste. In this calculator it applies to CORE cost only.","Allowance para sa posibleng failed prints o nasayang na production. Sa calculator na ito, sa CORE cost lang ito ina-apply."],
+    ["Profit markup","Your profit percentage added to CORE cost only.","Porsiyento ng tubo na idinadagdag sa CORE cost lang."],
+    ["CORE cost","Material + electricity + labor. Failure margin and markup are calculated from this CORE cost.","Material + electricity + labor. Dito kino-compute ang failure margin at markup."],
+    ["Final Price","The calculated selling price after core costs, other costs, failure allowance, and markup.","Computed selling price pagkatapos ng core costs, other costs, failure allowance, at markup."],
+    ["Autosave","Your current working values are automatically saved only in this browser/device.","Automatic na sine-save ang current values sa browser/device na ito lamang."],
+    ["Save JSON","Saves all calculator inputs as a portable editable project that you can load again later.","Sine-save lahat ng inputs bilang portable editable project na puwedeng i-load at i-edit ulit."],
+    ["PNG / PDF / CSV","Save permanent computation records for the product.","Nagse-save ng permanent computation records para sa product."]
+];
+
+function HelpInfo({ title, english, tagalog }) {
+    return React.createElement("span", { className: "ds-help-wrap" },
+        React.createElement("button", {
+            type: "button",
+            className: "ds-help-btn",
+            "aria-label": "About " + title,
+            title: english + " / " + tagalog,
+            onClick: (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const wrap = e.currentTarget.parentElement;
+                const wasOpen = wrap.classList.contains("ds-open");
+                document.querySelectorAll(".ds-help-wrap.ds-open").forEach(el => el.classList.remove("ds-open"));
+                if (!wasOpen) wrap.classList.add("ds-open");
+            }
+        }, "i"),
+        React.createElement("span", { className: "ds-help-pop", role: "tooltip" },
+            React.createElement("b", null, title),
+            React.createElement("br"),
+            React.createElement("b", null, "English: "), english,
+            React.createElement("br"),
+            React.createElement("span", { style: { display:"inline-block", marginTop:"5px" } },
+                React.createElement("b", null, "Tagalog: "), tagalog
+            )
+        )
+    );
+}
+
+function CalculatorGuide() {
+    return React.createElement("details", { className: "mb-4 rounded-2xl border bg-white p-4 shadow-sm" },
+        React.createElement("summary", { className: "cursor-pointer font-semibold text-gray-800" }, "ⓘ Calculator Guide / Gabay sa Calculator"),
+        React.createElement("p", { className: "mt-2 text-xs text-gray-500" }, "Click a term below to read its English and Tagalog description."),
+        React.createElement("div", { className: "mt-3 divide-y" },
+            CALCULATOR_GUIDE.map((g, i) =>
+                React.createElement("details", { key: i, className: "py-2" },
+                    React.createElement("summary", { className: "cursor-pointer text-sm font-medium text-gray-700" }, g[0]),
+                    React.createElement("div", { className: "mt-2 rounded-xl bg-gray-50 p-3 text-xs leading-relaxed text-gray-600" },
+                        React.createElement("b", null, "English: "), g[1],
+                        React.createElement("br"),
+                        React.createElement("span", { className: "mt-1 inline-block" },
+                            React.createElement("b", null, "Tagalog: "), g[2]
+                        )
+                    )
+                )
+            )
+        )
+    );
+}
+
+function App() {
+    const [s, setS] = usePersistedState(STORAGE_KEY, INITIAL_STATE);
+    useEffect(() => {
+        try {
+            const already = localStorage.getItem(WIPE_ONCE_KEY);
+            if (already === "1")
+                return;
+            localStorage.removeItem("ds3dpc_v1_4");
+            localStorage.removeItem("ds3dpc_v1_5");
+            localStorage.removeItem("ds3dpc_v1_6");
+            localStorage.removeItem("ds3dpc_v1_7");
+            localStorage.removeItem("ds3dpc_v1_7");
+            localStorage.setItem(WIPE_ONCE_KEY, "1");
+            setS(INITIAL_STATE);
+        }
+        catch (_a) { }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    const [useCount, setUseCount] = useState(null);
+    const jsonInputRef = useRef(null);
+    const [lastProjectSave, setLastProjectSave] = useState(null);
+    useEffect(() => { if (!s.createdAt)
+        setS((prev) => ({ ...prev, createdAt: new Date().toISOString() })); }, [s.createdAt]);
+    const counterWarnedRef = useRef(false);
+    useEffect(() => {
+        let mounted = true;
+        (async () => {
+            const value = await fetchCountApiValue("https://api.countapi.xyz/hit/drshiela3dprints/ds3dpc-v1-7", 4000);
+            if (!mounted)
+                return;
+            if (typeof value === "number") {
+                setUseCount(value);
+            }
+            else {
+                if (!counterWarnedRef.current) {
+                    counterWarnedRef.current = true;
+                    console.warn("CountAPI unavailable (ignored). The calculator will continue to work.");
+                }
+                setUseCount(null);
+            }
+        })();
+        return () => {
+            mounted = false;
+        };
+    }, []);
+    const currencyObj = CURRENCIES.find((c) => c.code === (s.currency || "PHP")) || CURRENCIES[0];
+    const PHP = currencyObj.symbol;
+    const setCurrency = (code) => {
+        setS({ ...s, currency: code });
+    };
+    const saveDefaultCurrency = () => {
+        try {
+            localStorage.setItem("ds3dpc_default_currency", s.currency || "PHP");
+        }
+        catch (_a) { }
+        alert("Default currency saved: " + (s.currency || "PHP"));
+    };
+    useEffect(() => {
+        if (!s.currency) {
+            let code = "PHP";
+            try {
+                code = localStorage.getItem("ds3dpc_default_currency") || "PHP";
+            }
+            catch (_a) { }
+            setS((prev) => ({ ...prev, currency: code }));
+        }
+    }, []);
+    const pricePerGram = useMemo(() => {
+        if (s.pricingMode === "fixed")
+            return Number(s.fixedPerGram) || 0;
+        const p = Number(s.spoolPrice);
+        const w = Number(s.spoolWeight);
+        return w > 0 ? p / w : 0;
+    }, [s.pricingMode, s.fixedPerGram, s.spoolPrice, s.spoolWeight]);
+    const weight_g = Number(s.partWeight) > 0 ? Number(s.partWeight) : 0;
+    const materialCost = weight_g * pricePerGram;
+    const h = Number(s.printTimeHours) || 0;
+    const m = Number(s.printTimeMinutes) || 0;
+    const sec = Number(s.printTimeSeconds) || 0;
+    const printTimeHoursTotal = h + m / 60 + sec / 3600;
+    const kwPresetObj = KW_PRESETS.find((p) => p.key === String(s.kwPreset)) || KW_PRESETS[0];
+    const avgKw = kwPresetObj.key === "other" ? Number(s.kwCustom) || 0 : Number(kwPresetObj.kw) || 0;
+    const modeElec = s.electricityMode || "wattage";
+    let electricityCost = 0;
+    if (modeElec === "kw") {
+        electricityCost = avgKw * printTimeHoursTotal * (Number(s.kwhPrice) || 0);
+    }
+    else if (modeElec === "php_per_hour") {
+        electricityCost = (Number(s.electricityPhpPerHour) || 0) * printTimeHoursTotal;
+    }
+    else {
+        const watt = Number(s.wattage) || 0;
+        electricityCost = (watt * printTimeHoursTotal / 1000) * (Number(s.kwhPrice) || 0);
+    }
+    const packagingCost = Number(s.packaging) || 0;
+    const accessoryList = Array.isArray(s.accessories) && s.accessories.length
+        ? s.accessories
+        : [
+            ...(Number(s.accessory1) ? [{ type: "Others", custom: "Accessory 1", cost: s.accessory1 }] : []),
+            ...(Number(s.accessory2) ? [{ type: "Others", custom: "Accessory 2", cost: s.accessory2 }] : []),
+        ];
+    const accessoriesCost = accessoryList.reduce((sum, a) => sum + (Number(a.cost) || 0), 0);
+    const paintCost = Number(s.paint) || 0;
+    const adhesivesCost = Number(s.adhesives) || 0;
+    const shippingCost = Number(s.shipping) || 0;
+    const modelingFeeCost = Number(s.modelingFee) || 0;
+    const laborCostNum = Number(s.laborCost) || 0;
+    const coreCost = materialCost + electricityCost + laborCostNum;
+    const otherCosts = packagingCost + accessoriesCost + paintCost + adhesivesCost + shippingCost + modelingFeeCost;
+    const baseSubtotal = coreCost + otherCosts;
+    const failureMarginRate = Number(s.failureMarginPct) || 0;
+    const failureMarginAmount = coreCost * (failureMarginRate / 100);
+    const markupRate = Number(s.markupPct) || 0;
+    const markupAmount = coreCost * (markupRate / 100);
+    const finalPrice = baseSubtotal + failureMarginAmount + markupAmount;
+    const safeFileName = () => {
+        const name = (s.productName || "Untitled_Product").trim().replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "Untitled_Product";
+        return `${name}_${new Date().toISOString().slice(0, 10)}`;
+    };
+    const createdDate = () => { const d = s.createdAt ? new Date(s.createdAt) : new Date(); return d.toLocaleString(); };
+    const downloadBlob = (blob, filename) => { const u = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = u; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u); };
+    const currentEntry = () => { const { saves, ...data } = s; return { name: s.productName || "Untitled Product", ts: Date.now(), data }; };
+    const saveJSON = () => { const createdAt = s.createdAt || new Date().toISOString(); const payload = { format: "DS3DPC Project", version: "1.8", createdAt, state: { ...s, createdAt, saves: [] } }; downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }), safeFileName() + ".json"); setLastProjectSave(Date.now()); };
+    const loadJSONFile = async (file) => { if (!file)
+        return; try {
+        const obj = JSON.parse(await file.text());
+        const d = obj.state || obj.data || obj;
+        const migrated = Array.isArray(d.accessories) ? d.accessories : [...(Number(d.accessory1) ? [{ type: "Others", custom: "Accessory 1", cost: d.accessory1 }] : []), ...(Number(d.accessory2) ? [{ type: "Others", custom: "Accessory 2", cost: d.accessory2 }] : [])];
+        setS({ ...INITIAL_STATE, ...d, createdAt: (d.createdAt || obj.createdAt || new Date().toISOString()), accessories: migrated, saves: s.saves });
+        setLastProjectSave(Date.now());
+    }
+    catch (_a) {
+        alert("This JSON project file could not be loaded.");
+    } };
+    const money = (n) => `${PHP} ${pretty(Number(n) || 0)}`;
+    const timeText = () => {
+        const parts = [];
+        if (h) parts.push(`${h} hr`);
+        if (m) parts.push(`${m} min`);
+        if (sec) parts.push(`${sec} sec`);
+        return parts.length ? parts.join(" ") : "0 min";
+    };
+    const materialMethodText = () => s.pricingMode === "fixed"
+        ? `Fixed price/gram: ${PHP} ${pretty(pricePerGram)}/g`
+        : `Spool: ${money(s.spoolPrice)} / ${pretty(Number(s.spoolWeight) || 0)} g  →  ${PHP} ${pretty(pricePerGram)}/g`;
+    const electricityDetails = () => {
+        if (modeElec === "kw") return [
+            ["Method", "Average power from monitoring device"],
+            ["Printer / preset", kwPresetObj.label],
+            ["Average power", `${pretty(avgKw)} kW`],
+            ["Electricity rate", `${PHP} ${pretty(Number(s.kwhPrice) || 0)}/kWh`],
+            ["Print time", timeText()]
+        ];
+        if (modeElec === "php_per_hour") return [
+            ["Method", "Fixed electricity cost per print hour"],
+            ["Cost per hour", `${PHP} ${pretty(Number(s.electricityPhpPerHour) || 0)}/hr`],
+            ["Print time", timeText()]
+        ];
+        return [
+            ["Method", "Printer wattage × print time"],
+            ["Printer wattage", `${pretty(Number(s.wattage) || 0)} W`],
+            ["Electricity rate", `${PHP} ${pretty(Number(s.kwhPrice) || 0)}/kWh`],
+            ["Print time", timeText()]
+        ];
+    };
+    const recordSections = () => [
+        { title: "PRODUCT DETAILS", rows: [
+            ["Date Created", createdDate()]
+        ]},
+        { title: "MATERIAL", rows: [
+            ["Pricing method", materialMethodText()],
+            ["Filament consumed", `${pretty(weight_g)} g`],
+            ["Price per gram", `${PHP} ${pretty(pricePerGram)}/g`],
+            ["Material Cost", money(materialCost), "total"]
+        ]},
+        { title: "PRINT & ELECTRICITY", rows: [
+            ...electricityDetails(),
+            ["Electricity Cost", money(electricityCost), "total"]
+        ]},
+        { title: "LABOR", rows: [
+            ["Labor Cost", money(laborCostNum), "total"]
+        ]},
+        { title: "ACCESSORIES & OTHER COSTS", rows: [
+            ...(accessoryList.length
+                ? accessoryList.map(a => [
+                    a.type === "Others" && a.custom ? a.custom : (a.type || "Accessory"),
+                    money(Number(a.cost) || 0)
+                ])
+                : [["Accessories", `${PHP} 0`]]),
+            ["Accessories Total", money(accessoriesCost), "subtotal"],
+            ["Packaging", money(packagingCost)],
+            ["Paint", money(paintCost)],
+            ["Adhesives", money(adhesivesCost)],
+            ["Shipping", money(shippingCost)],
+            ["3D Modeling Fee", money(modelingFeeCost)],
+            ["Other Costs Total", money(otherCosts), "subtotal"]
+        ]},
+        { title: "PRICING BREAKDOWN", rows: [
+            ["CORE Cost", money(coreCost)],
+            ["CORE includes", "Material + Electricity + Labor"],
+            ["Subtotal", money(baseSubtotal)],
+            ["Failure Margin", `${pretty(failureMarginRate)}% of CORE = ${money(failureMarginAmount)}`],
+            ["Profit Markup", `${pretty(markupRate)}% of CORE = ${money(markupAmount)}`]
+        ]}
+    ];
+
+    const savePNG = () => {
+        const sections = recordSections();
+        const c = document.createElement("canvas");
+        const ctx = c.getContext("2d");
+        const W = 1400, pad = 70, rowH = 46, sectionHeadH = 54;
+        let H = 235;
+        sections.forEach(sec => H += sectionHeadH + sec.rows.length * rowH + 24);
+        H += 150;
+        c.width = W; c.height = H;
+
+        const green = "#16a34a", paleGreen = "#f0fdf4", yellow = "#facc15";
+        const dark = "#111827", gray = "#6b7280", line = "#e5e7eb", pale = "#f9fafb";
+
+        ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,W,H);
+        ctx.fillStyle = dark; ctx.font = "700 28px Arial";
+        ctx.fillText("PRODUCT COMPUTATION RECORD", pad, 65);
+
+        ctx.fillStyle = green; ctx.fillRect(pad, 95, W-pad*2, 92);
+        ctx.fillStyle = "#ffffff"; ctx.font = "700 38px Arial";
+        const pname = s.productName || "Untitled Product";
+        ctx.fillText(pname.length > 52 ? pname.slice(0,49)+"…" : pname, pad+28, 153);
+
+        let y = 220;
+        sections.forEach(sec => {
+            ctx.fillStyle = green; ctx.fillRect(pad, y, W-pad*2, sectionHeadH);
+            ctx.fillStyle = "#ffffff"; ctx.font = "700 21px Arial";
+            ctx.fillText(sec.title, pad+20, y+35);
+            y += sectionHeadH;
+            sec.rows.forEach((r, idx) => {
+                ctx.fillStyle = r[2] === "total" ? paleGreen : (idx % 2 ? "#ffffff" : pale);
+                ctx.fillRect(pad, y, W-pad*2, rowH);
+                ctx.strokeStyle = line; ctx.beginPath(); ctx.moveTo(pad,y+rowH); ctx.lineTo(W-pad,y+rowH); ctx.stroke();
+                ctx.fillStyle = r[2] ? dark : gray;
+                ctx.font = r[2] ? "700 19px Arial" : "18px Arial";
+                ctx.fillText(String(r[0]), pad+20, y+30);
+                ctx.textAlign = "right";
+                ctx.fillStyle = dark;
+                ctx.font = r[2] ? "700 19px Arial" : "18px Arial";
+                ctx.fillText(String(r[1]), W-pad-20, y+30);
+                ctx.textAlign = "left";
+                y += rowH;
+            });
+            y += 24;
+        });
+
+        ctx.fillStyle = yellow; ctx.fillRect(pad, y+8, W-pad*2, 105);
+        ctx.fillStyle = dark; ctx.font = "700 25px Arial";
+        ctx.fillText("FINAL PRICE", pad+25, y+72);
+        ctx.textAlign = "right"; ctx.font = "700 38px Arial";
+        ctx.fillText(money(finalPrice), W-pad-25, y+73);
+        ctx.textAlign = "left";
+
+        c.toBlob(b => downloadBlob(b, safeFileName() + ".png"), "image/png");
+    };
+
+    const escapeHtml = (v) => String(v ?? "").replace(/[&<>"']/g, ch => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+    }[ch]));
+
+    const savePDF = () => {
+        const w = window.open("", "_blank");
+        if (!w) {
+            alert("Please allow pop-ups to save the PDF record.");
+            return;
+        }
+        const sectionsHtml = recordSections().map(sec => `
+            <section>
+              <h2>${escapeHtml(sec.title)}</h2>
+              <table>
+                ${sec.rows.map(r => `<tr class="${r[2] || ""}">
+                    <td>${escapeHtml(r[0])}</td>
+                    <td>${escapeHtml(r[1])}</td>
+                </tr>`).join("")}
+              </table>
+            </section>`).join("");
+
+        w.document.write(`<!doctype html><html><head><meta charset="utf-8">
+        <title>${escapeHtml(safeFileName())}</title>
+        <style>
+        @page{size:A4;margin:14mm}
+        *{box-sizing:border-box}
+        body{font-family:Arial,sans-serif;color:#111827;margin:0;background:#fff;font-size:12px}
+        .record-title{font-size:18px;font-weight:800;letter-spacing:.3px;margin:0 0 12px}
+        .product{background:#16a34a;color:#fff;padding:18px 20px;border-radius:8px;margin-bottom:16px}
+        .product .name{font-size:25px;font-weight:800;line-height:1.15}
+        section{margin:0 0 13px;break-inside:avoid}
+        h2{margin:0;background:#16a34a;color:#fff;padding:8px 11px;font-size:13px;letter-spacing:.2px}
+        table{width:100%;border-collapse:collapse}
+        td{padding:7px 10px;border-bottom:1px solid #e5e7eb;vertical-align:top}
+        tr:nth-child(odd){background:#f9fafb}
+        td:first-child{width:42%;color:#6b7280}
+        td:last-child{text-align:right;font-weight:500}
+        tr.total{background:#f0fdf4!important;font-weight:700}
+        tr.total td,tr.subtotal td{font-weight:700;color:#111827}
+        .final{margin-top:16px;background:#facc15;padding:17px 20px;border-radius:8px;display:flex;justify-content:space-between;align-items:center;font-weight:800}
+        .final .label{font-size:17px}.final .amount{font-size:25px}
+        .actions{margin-top:16px}
+        button{border:0;border-radius:8px;background:#111827;color:#fff;padding:9px 14px;cursor:pointer}
+        @media print{.actions{display:none} body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+        </style></head><body>
+        <div class="record-title">PRODUCT COMPUTATION RECORD</div>
+        <div class="product"><div class="name">${escapeHtml(s.productName || "Untitled Product")}</div></div>
+        ${sectionsHtml}
+        <div class="final"><span class="label">FINAL PRICE</span><span class="amount">${escapeHtml(money(finalPrice))}</span></div>
+        <div class="actions"><button onclick="window.print()">Save / Print PDF</button></div>
+        </body></html>`);
+        w.document.close();
+        setTimeout(() => w.print(), 350);
+    };
+
+    const saveCurrentCSV = () => downloadCSV([toCsvRow(currentEntry())], safeFileName());
+    const resetEverything = () => {
+        const ok = confirm("Reset EVERYTHING (all fields + saves)?\n\nIre-reset lahat (fields + saves). Tuloy?");
+        if (!ok)
+            return;
+        try {
+            localStorage.removeItem("ds3dpc_v1_4");
+            localStorage.removeItem("ds3dpc_v1_5");
+            localStorage.removeItem("ds3dpc_v1_6");
+        }
+        catch (_a) { }
+        setS(RESET_STATE);
+    };
+    const setMode = (mode) => setS({ ...s, pricingMode: mode });
+    const setElecMode = (mode) => setS({ ...s, electricityMode: mode });
+    const csvHeaders = [
+        "Name",
+        "Saved At",
+        "Pricing Mode",
+        "Spool Price",
+        "Spool Weight (g)",
+        "Fixed Price/g",
+        "Filament Consumed (g)",
+        "Print Time (hrs)",
+        "Electricity Mode",
+        "Wattage (W)",
+        "Average Power (kW)",
+        "kWh Price",
+        "Electricity ₱/hr",
+        "Labor Cost",
+        "Packaging",
+        "Accessory Details",
+        "Accessories Total",
+        "Paint",
+        "Adhesives",
+        "Shipping",
+        "3D Modeling Fee",
+        "Failure Margin %",
+        "Markup %",
+        "Price/gram",
+        "Material Cost",
+        "Electricity Cost",
+        "Other Costs (pkg+acc1+acc2+paint+adh+ship+3D)",
+        "Core Cost (mat+elec+labor)",
+        "Subtotal (core+others)",
+        "Failure Amount (core only)",
+        "Markup Amount (core only)",
+        "Final Price",
+    ];
+    const csvEscape = (val) => {
+        const str = String(val !== null && val !== void 0 ? val : "");
+        return '"' + str.replace(/"/g, '""') + '"';
+    };
+    const toCsvRow = (entry) => {
+        var _a;
+        const d = entry.data;
+        const ppg = d.pricingMode === "fixed"
+            ? Number(d.fixedPerGram) || 0
+            : (Number(d.spoolPrice) || 0) / ((Number(d.spoolWeight) || 0) || 1);
+        const weight = Number(d.partWeight) || 0;
+        const mat = weight * ppg;
+        const hh = Number(d.printTimeHours) || 0;
+        const mm = Number(d.printTimeMinutes) || 0;
+        const ss = Number(d.printTimeSeconds) || 0;
+        const printHrs = hh + mm / 60 + ss / 3600;
+        const elecMode = d.electricityMode || "wattage";
+        const presetKey = String((_a = d.kwPreset) !== null && _a !== void 0 ? _a : "");
+        const presetObj = KW_PRESETS.find((p) => p.key === presetKey) || KW_PRESETS[0];
+        const avgKwCsv = presetObj.key === "other" ? Number(d.kwCustom) || 0 : Number(presetObj.kw) || 0;
+        let elec = 0;
+        let wattForCsv = "";
+        let phpPerHourCsv = "";
+        if (elecMode === "kw") {
+            elec = avgKwCsv * printHrs * (Number(d.kwhPrice) || 0);
+        }
+        else if (elecMode === "php_per_hour") {
+            phpPerHourCsv = Number(d.electricityPhpPerHour) || 0;
+            elec = (Number(d.electricityPhpPerHour) || 0) * printHrs;
+        }
+        else {
+            const watt = Number(d.wattage) || 0;
+            wattForCsv = watt;
+            elec = (watt * printHrs / 1000) * (Number(d.kwhPrice) || 0);
+        }
+        const pkg = Number(d.packaging) || 0;
+        const csvAccessories = Array.isArray(d.accessories) && d.accessories.length ? d.accessories : [
+            ...(Number(d.accessory1) ? [{ type: "Others", custom: "Accessory 1", cost: d.accessory1 }] : []),
+            ...(Number(d.accessory2) ? [{ type: "Others", custom: "Accessory 2", cost: d.accessory2 }] : []),
+        ];
+        const accDetails = csvAccessories.map((a) => `${a.type === "Others" && a.custom ? a.custom : (a.type || "Accessory")}: ${Number(a.cost) || 0}`).join("; ");
+        const accTotal = csvAccessories.reduce((sum, a) => sum + (Number(a.cost) || 0), 0);
+        const paint = Number(d.paint) || 0;
+        const adh = Number(d.adhesives) || 0;
+        const ship = Number(d.shipping) || 0;
+        const model = Number(d.modelingFee) || 0;
+        const labor = Number(d.laborCost) || 0;
+        const core = mat + elec + labor;
+        const others = pkg + accTotal + paint + adh + ship + model;
+        const sub = core + others;
+        const fmRate = Number(d.failureMarginPct) || 0;
+        const fmAmt = core * (fmRate / 100);
+        const muRate = Number(d.markupPct) || 0;
+        const muAmt = core * (muRate / 100);
+        const fin = sub + fmAmt + muAmt;
+        const cells = [
+            entry.name,
+            new Date(entry.ts).toLocaleString(),
+            d.pricingMode,
+            Number(d.spoolPrice) || 0,
+            Number(d.spoolWeight) || 0,
+            Number(d.fixedPerGram) || 0,
+            Number(d.partWeight) || 0,
+            printHrs,
+            elecMode,
+            wattForCsv === "" ? "" : wattForCsv,
+            avgKwCsv,
+            Number(d.kwhPrice) || 0,
+            phpPerHourCsv === "" ? "" : phpPerHourCsv,
+            Number(d.laborCost) || 0,
+            pkg,
+            accDetails,
+            accTotal,
+            paint,
+            adh,
+            ship,
+            model,
+            Number(d.failureMarginPct) || 0,
+            Number(d.markupPct) || 0,
+            ppg,
+            mat,
+            elec,
+            others,
+            core,
+            sub,
+            fmAmt,
+            muAmt,
+            fin,
+        ];
+        return cells.map((v) => (typeof v === "string" ? csvEscape(v) : v)).join(",");
+    };
+    const BOM = String.fromCharCode(0xfeff);
+    const downloadCSV = (rows, filename) => {
+        const content = BOM + csvHeaders.join(",") + "\n" + rows.join("\n");
+        const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename.endsWith(".csv") ? filename : filename + ".csv";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+    const doSave = () => {
+        let name = (s.productName || "").trim();
+        if (!name) {
+            const typed = prompt("Enter product name to save (Ilagay ang pangalan ng produkto):");
+            if (!typed)
+                return;
+            name = String(typed).trim();
+        }
+        const { saves, productName, ...data } = s;
+        const snapshot = { name, ts: Date.now(), data };
+        let newSaves = Array.isArray(s.saves) ? [...s.saves] : [];
+        if (newSaves.length >= 3) {
+            const ok = confirm("You already have 3 saves. Override the 1st save (\"" +
+                newSaves[0].name +
+                "\") and push others down?\n\n" +
+                "May 3 saves ka na. I-override ang unang save (\"" +
+                newSaves[0].name +
+                "\") at itulak pababa ang iba?");
+            if (!ok)
+                return;
+            newSaves = [snapshot, ...newSaves].slice(0, 3);
+        }
+        else {
+            newSaves = [snapshot, ...newSaves];
+        }
+        setS({ ...s, saves: newSaves, productName: name });
+        alert("Saved: " + name);
+    };
+    const loadSave = (idx) => {
+        const entry = s.saves[idx];
+        if (!entry)
+            return;
+        const d = entry.data || {};
+        const migratedAccessories = Array.isArray(d.accessories) ? d.accessories : [
+            ...(Number(d.accessory1) ? [{ type: "Others", custom: "Accessory 1", cost: d.accessory1 }] : []),
+            ...(Number(d.accessory2) ? [{ type: "Others", custom: "Accessory 2", cost: d.accessory2 }] : []),
+        ];
+        setS({ ...INITIAL_STATE, ...d, accessories: migratedAccessories, saves: s.saves, productName: entry.name });
+    };
+    const deleteSave = (idx) => {
+        const entry = s.saves[idx];
+        if (!entry)
+            return;
+        const ok = confirm("Delete save \"" + entry.name + "\"? (Burahin ang save na ito?)");
+        if (!ok)
+            return;
+        setS({ ...s, saves: s.saves.filter((_, i) => i !== idx) });
+    };
+    const downloadOneSave = (idx) => {
+        const entry = s.saves[idx];
+        if (!entry)
+            return;
+        downloadCSV([toCsvRow(entry)], entry.name || "save");
+    };
+    const downloadAllSaves = () => {
+        if (!s.saves || s.saves.length === 0) {
+            alert("No saves to download.");
+            return;
+        }
+        downloadCSV(s.saves.map(toCsvRow), "DS3DPC_Saves_" + new Date().toISOString().slice(0, 10));
+    };
+    const fmtDate = (ts) => new Date(ts).toLocaleString();
+    const selfTest = () => {
+        try {
+            const entry = {
+                name: "Test Item",
+                ts: Date.now(),
+                data: {
+                    ...INITIAL_STATE,
+                    pricingMode: "fixed",
+                    fixedPerGram: 2,
+                    partWeight: 10,
+                    printTimeHours: 1,
+                    printTimeMinutes: 0,
+                    printTimeSeconds: 0,
+                    electricityMode: "php_per_hour",
+                    electricityPhpPerHour: 5,
+                    laborCost: 15,
+                    packaging: 100,
+                    accessories: [
+                        { type: "Keyring", custom: "", cost: 75 },
+                        { type: "Jump ring", custom: "", cost: 25 },
+                    ],
+                    accessory1: 0,
+                    accessory2: 0,
+                    paint: 50,
+                    adhesives: 25,
+                    shipping: 200,
+                    modelingFee: 300,
+                    failureMarginPct: 10,
+                    markupPct: 20,
+                },
+            };
+            const row = toCsvRow(entry);
+            if (!row || typeof row !== "string" || row.includes("\n")) {
+                throw new Error("Row format invalid");
+            }
+            const cells = row.split(",");
+            const idxCore = csvHeaders.indexOf("Core Cost (mat+elec+labor)");
+            const idxSub = csvHeaders.indexOf("Subtotal (core+others)");
+            const idxFm = csvHeaders.indexOf("Failure Amount (core only)");
+            const idxMu = csvHeaders.indexOf("Markup Amount (core only)");
+            const idxFin = csvHeaders.indexOf("Final Price");
+            const coreVal = parseFloat(cells[idxCore]);
+            const subVal = parseFloat(cells[idxSub]);
+            const fmVal = parseFloat(cells[idxFm]);
+            const muVal = parseFloat(cells[idxMu]);
+            const finVal = parseFloat(cells[idxFin]);
+            // core = 20 + 5 + 15 = 40
+            // others = 100+75+25+50+25+200+300 = 775
+            // sub = 815
+            // fm = 4
+            // mu = 8
+            // fin = 827
+            if (Math.abs(coreVal - 40) > 0.01)
+                throw new Error("Core calc failed");
+            if (Math.abs(subVal - 815) > 0.01)
+                throw new Error("Subtotal calc failed");
+            if (Math.abs(fmVal - 4) > 0.01)
+                throw new Error("Failure calc failed");
+            if (Math.abs(muVal - 8) > 0.01)
+                throw new Error("Markup calc failed");
+            if (Math.abs(finVal - 827) > 0.01)
+                throw new Error("Final calc failed");
+            alert("Self-test passed: Failure + Markup apply to CORE only, and accessories are treated as pass-through.");
+        }
+        catch (e) {
+            alert("Self-test FAILED: " + (e && e.message ? e.message : String(e)));
+        }
+    };
+    return (React.createElement("div", { className: "min-h-screen bg-gray-50 p-6" },
+        React.createElement("div", { className: "mx-auto max-w-5xl" },
+            React.createElement("header", { className: "mb-4" },
+                React.createElement("h1", { className: "text-2xl font-bold" }, "Dr Shiela 3D Prints 3D Printing Calculator \uD83C\uDDF5\uD83C\uDDED"),
+                React.createElement("p", { className: "text-sm text-gray-600" }, "Version 1.8 \u00B7 Autosaves current work in this browser \u00B7 Multi-currency")),
+            React.createElement("section", { className: "mb-4 rounded-2xl border bg-white p-4 shadow-sm" },
+                React.createElement("div", { className: "grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end" },
+                    React.createElement(Field, { label: "Product Name", hint: "Identifies this calculation and is used in exported file names." },
+                        React.createElement("input", { className: "w-full rounded-xl border p-2 outline-none focus:border-gray-400", placeholder: "e.g. Custom Pikachu Keychain", value: s.productName || "", onChange: (e) => setS({ ...s, productName: e.target.value }) })),
+                    React.createElement("div", { className: "flex flex-wrap items-end gap-2" },
+                        React.createElement("label", { className: "flex flex-col gap-1 text-sm font-medium text-gray-700" },
+                            React.createElement("span", null,
+                                "Currency",
+                                React.createElement(HelpInfo, { title: "Currency", english: "Choose the currency symbol used by the calculator. This does not convert exchange rates.", tagalog: "Piliin ang currency na gagamitin sa presyo. Hindi ito automatic currency conversion." })),
+                            React.createElement("select", { className: "min-w-[130px] rounded-xl border p-2", value: s.currency || "PHP", onChange: (e) => setCurrency(e.target.value) }, CURRENCIES.map((c) => React.createElement("option", { key: c.code, value: c.code }, c.label)))),
+                        React.createElement("button", { type: "button", onClick: saveDefaultCurrency, className: "rounded-xl border px-3 py-2 text-sm font-medium hover:bg-gray-50" }, "Set as default"))),
+                React.createElement("div", { className: "mt-3 flex items-center gap-2 text-xs text-gray-500" },
+                    React.createElement("span", { className: "inline-block h-2 w-2 rounded-full bg-green-500" }),
+                    "Current work is automatically saved only in this browser/device.")),
+            React.createElement("section", { className: "mb-4 rounded-2xl border bg-white p-3 shadow-sm" },
+                React.createElement("div", { className: "flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between" },
+                    React.createElement("div", null,
+                        React.createElement("div", { className: "font-semibold" },
+                            "Product Files",
+                            React.createElement(HelpInfo, { title: "Product Files", english: "JSON saves an editable project. PNG, PDF, and CSV save product computation records.", tagalog: "Ang JSON ay editable project file. Ang PNG, PDF, at CSV ay records ng computation ng product." }))),
+                    React.createElement("div", { className: "flex flex-wrap gap-2" },
+                        React.createElement("button", { onClick: saveJSON, title: "Save all calculator inputs so you can import, edit, and recalculate this product in the future.", className: "rounded-xl bg-gray-900 px-3 py-2 text-sm text-white" }, "Save JSON \u24D8"),
+                        React.createElement("button", { onClick: () => { var _a; return (_a = jsonInputRef.current) === null || _a === void 0 ? void 0 : _a.click(); }, title: "Import a saved JSON project to continue editing it.", className: "rounded-xl border px-3 py-2 text-sm" }, "Load JSON \u24D8"),
+                        React.createElement("input", { ref: jsonInputRef, type: "file", accept: "application/json,.json", className: "hidden", onChange: e => { var _a; loadJSONFile((_a = e.target.files) === null || _a === void 0 ? void 0 : _a[0]); e.target.value = ""; } }),
+                        React.createElement("span", { className: "mx-1 hidden border-l sm:block" }),
+                        React.createElement("button", { onClick: savePNG, title: "Save the computation details as an image for your product records.", className: "rounded-xl border px-3 py-2 text-sm" }, "PNG \u24D8"),
+                        React.createElement("button", { onClick: savePDF, title: "Save a complete, printable computation record for this product.", className: "rounded-xl border px-3 py-2 text-sm" }, "PDF \u24D8"),
+                        React.createElement("button", { onClick: saveCurrentCSV, title: "Save the computation data as a spreadsheet-compatible file for your product records and tracking.", className: "rounded-xl border px-3 py-2 text-sm" }, "CSV \u24D8"))),
+                React.createElement("div", { className: "mt-2 text-xs text-gray-500" }, lastProjectSave ? "✓ JSON project saved/loaded · Current work continues to autosave locally" : "● Current work autosaves in this browser · JSON is your portable editable copy")),
+            React.createElement(CalculatorGuide, null),
+            React.createElement("div", { className: "grid grid-cols-1 gap-4 md:grid-cols-4" },
+                React.createElement("section", { className: "col-span-1 space-y-3 rounded-2xl bg-white p-4 shadow" },
+                    React.createElement("h2", { className: "mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white" }, "Material Cost"),
+                    React.createElement("h3", { className: "-mt-1 text-sm text-gray-600" }, "Price per Gram (2 Ways. Choose 1)"),
+                    React.createElement("div", { className: "mt-2 flex items-center gap-2", title: "Use spool price and weight to compute price/g (Gamitin ang presyo at bigat ng spool para sa price/g)" },
+                        React.createElement("input", { type: "checkbox", checked: s.pricingMode === "derive", onChange: () => setMode("derive") }),
+                        React.createElement("label", { className: "font-medium" }, "Derive from spool")),
+                    React.createElement("div", { className: "grid grid-cols-2 gap-3" },
+                        React.createElement(Field, { label: `Spool price (${PHP})`, hint: "Total cost of one filament spool (Kung magkano mo nabili ang 1 spool ng filament)." },
+                            React.createElement(Num, { value: s.spoolPrice, onChange: (v) => setS({ ...s, spoolPrice: v }) })),
+                        React.createElement(Field, { label: "Spool weight (g)", hint: "Weight of the entire spool, usually 1000 g (Bigat ng buong spool, usually 1000 g (1kg))." },
+                            React.createElement(Num, { value: s.spoolWeight, onChange: (v) => setS({ ...s, spoolWeight: v }) }))),
+                    React.createElement("div", { className: "my-2 text-center text-xs text-gray-400" }, "\u2014 or \u2014"),
+                    React.createElement("div", { className: "flex items-center gap-2", title: "Use your own price/g (Gamitin ang sarili mong price/g)" },
+                        React.createElement("input", { type: "checkbox", checked: s.pricingMode === "fixed", onChange: () => setMode("fixed") }),
+                        React.createElement("label", { className: "font-medium" },
+                            "Fixed price/gram (",
+                            PHP,
+                            "/g)")),
+                    React.createElement(Field, { label: `Set price (${PHP}/g)`, hint: "Your set selling rate per gram (Kung ano yung rate mo per gram)." },
+                        React.createElement(Num, { value: s.fixedPerGram, onChange: (v) => setS({ ...s, fixedPerGram: v }) })),
+                    React.createElement("h3", { className: "mt-4 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white" }, "Usage"),
+                    React.createElement(Field, { label: "Filament consumed (g)", hint: "From your slicer\u2019s estimate (Mula sa estimate ng slicer. Makikita mo sa preview after mag-slice)." },
+                        React.createElement(Num, { value: s.partWeight, onChange: (v) => setS({ ...s, partWeight: v }) })),
+                    React.createElement("div", { className: "ds-desktop-links" },
+                    React.createElement("div", { className: "mt-4 rounded bg-yellow-50 p-3 text-sm" },
+                        React.createElement("strong", null, "Kung nakatulong sa'yo ang calculator na ito, please support me para makagawa pa ako ng mga content na makakatulong sa 3D printing journey mo. Follow me on Youtube, Facebook, TikTok and Instagram.")),
+                    React.createElement("div", { className: "mt-3 flex flex-wrap gap-2" },
+                        React.createElement(ExternalLink, { href: s.facebookUrl, className: "rounded-2xl border border-blue-600 bg-blue-600 px-3 py-2 text-sm text-white shadow-sm", title: "Follow me on Facebook" }, "Facebook"),
+                        React.createElement(ExternalLink, { href: s.youtubeUrl, className: "rounded-2xl border border-red-600 bg-red-600 px-3 py-2 text-sm text-white shadow-sm", title: "Follow me on YouTube" }, "YouTube"),
+                        React.createElement(ExternalLink, { href: s.tiktokUrl, className: "rounded-2xl border border-black bg-black px-3 py-2 text-sm text-white shadow-sm", title: "Follow me on TikTok" }, "TikTok"),
+                        React.createElement(ExternalLink, { href: s.instagramUrl, className: "rounded-2xl border border-fuchsia-600 bg-fuchsia-600 px-3 py-2 text-sm text-white shadow-sm", title: "Follow me on Instagram" }, "Instagram")),
+                    React.createElement("div", { className: "mt-3" },
+                        React.createElement(ExternalLink, { href: "https://youtu.be/5kikGZ-876A?si=aebU-45P01a4zZDL", className: "inline-flex items-center rounded-2xl border border-red-600 bg-white px-3 py-2 text-sm font-semibold text-red-600 shadow-sm hover:bg-red-50", title: "Watch the video guide on YouTube" }, "▶ How to Use This Calculator / Video Guide")),
+                    React.createElement("div", { className: "mt-3 rounded-xl border bg-white p-3 text-sm" },
+                        React.createElement("div", { className: "font-semibold" }, "Tapo Monitoring Device I use:"),
+                        React.createElement(ExternalLink, { href: s.tapoUrl, className: "mt-2 inline-block rounded-xl border px-3 py-2 text-sm shadow-sm", title: "Open my Shopee link" }, "Open Shopee link")),
+                    useCount !== null && (React.createElement("div", { className: "mt-6 text-center text-sm text-gray-600" },
+                        React.createElement("strong", null, useCount.toLocaleString()),
+                        " people have used this 3D printing calculator."))),),
+
+                React.createElement("section", { className: "col-span-1 space-y-3 rounded-2xl bg-white p-4 shadow" },
+                    React.createElement("h2", { className: "mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white" }, "Print & Power"),
+                    React.createElement(Field, { label: "Print time", hint: "Total printing duration (Kabuuang oras ng pagpi-print. Makikita rin sa slicer)." },
+                        React.createElement("div", { className: "grid grid-cols-3 gap-2" },
+                            React.createElement("div", null,
+                                React.createElement("label", { className: "mb-1 block text-xs text-gray-500" }, "Hour"),
+                                React.createElement(Num, { value: s.printTimeHours, onChange: (v) => setS({ ...s, printTimeHours: v }), placeholder: "Hour" })),
+                            React.createElement("div", null,
+                                React.createElement("label", { className: "mb-1 block text-xs text-gray-500" }, "Min"),
+                                React.createElement(Num, { value: s.printTimeMinutes, onChange: (v) => setS({ ...s, printTimeMinutes: v }), placeholder: "Min" })),
+                            React.createElement("div", null,
+                                React.createElement("label", { className: "mb-1 block text-xs text-gray-500" }, "Sec"),
+                                React.createElement(Num, { value: s.printTimeSeconds, onChange: (v) => setS({ ...s, printTimeSeconds: v }), placeholder: "Sec" }))),
+                        React.createElement("div", { className: "mt-1 text-xs text-gray-500" },
+                            "Decimal hours: ",
+                            pretty(printTimeHoursTotal),
+                            " h")),
+                    React.createElement(Field, { label: `Electricity price (${PHP}/kWh)`, hint: "Your electric rate per kWh (Presyo ng kuryente kada kWh. Check your electricity bill)." },
+                        React.createElement(Num, { value: s.kwhPrice, onChange: (v) => setS({ ...s, kwhPrice: v }) })),
+                    React.createElement("div", { className: "mt-3 rounded bg-blue-600 px-3 py-2 text-center text-sm font-bold text-white" }, "Electricity cost mode (3 ways)"),
+                    React.createElement("div", { className: "mt-2 flex items-center gap-2", title: "Compute using printer wattage and print time" },
+                        React.createElement("input", { type: "checkbox", checked: modeElec === "wattage", onChange: () => setElecMode("wattage") }),
+                        React.createElement("span", { className: "text-sm font-medium" }, "Use printer wattage \u00D7 print time")),
+                    modeElec === "wattage" && (React.createElement(Field, { label: "Printer wattage (W)", hint: "Average power draw of your printer (Average na konsumo ng kuryente ng machine. I-check sa internet ang specs ng 3D printer mo)." },
+                        React.createElement(Num, { value: s.wattage, onChange: (v) => setS({ ...s, wattage: v }) }))),
+                    React.createElement("div", { className: "my-2 text-center text-xs text-gray-400" }, "\u2014 or \u2014"),
+                    React.createElement("div", { className: "flex items-center gap-2", title: "Compute using average power (kW) based on monitoring device readings" },
+                        React.createElement("input", { type: "checkbox", checked: modeElec === "kw", onChange: () => setElecMode("kw") }),
+                        React.createElement("span", { className: "text-sm font-medium" }, "Use average energy (kW) from monitoring device")),
+                    modeElec === "kw" && (React.createElement(React.Fragment, null,
+                        React.createElement(Field, { label: "Select printer model (kW)", hint: HELP_KW_HINT },
+                            React.createElement("select", { className: "w-full rounded-xl border p-2 outline-none focus:border-gray-400", value: s.kwPreset, onChange: (e) => setS({ ...s, kwPreset: e.target.value }) }, KW_PRESETS.map((p) => (React.createElement("option", { key: p.key, value: p.key }, p.label))))),
+                        String(s.kwPreset) === "other" && (React.createElement(Field, { label: "Custom average power (kW)", hint: "Ilagay ang sarili mong kW value (average power) based sa monitoring device mo." },
+                            React.createElement(Num, { value: s.kwCustom, onChange: (v) => setS({ ...s, kwCustom: v }), step: 0.001 }))),
+                        React.createElement("div", { className: "rounded-xl border bg-gray-50 p-3 text-sm" },
+                            React.createElement("div", { className: "flex items-center justify-between" },
+                                React.createElement("span", { className: "text-gray-600" }, "Selected average power"),
+                                React.createElement("span", { className: "font-semibold" },
+                                    pretty(avgKw),
+                                    " kW")),
+                            React.createElement("div", { className: "mt-1 text-xs text-gray-500" }, "Formula: (kW) \u00D7 (print hours) \u00D7 (\u20B1/kWh)")))),
+                    React.createElement("div", { className: "my-2 text-center text-xs text-gray-400" }, "\u2014 or \u2014"),
+                    React.createElement("div", { className: "flex items-center gap-2", title: "Set a fixed electricity cost per print hour (Example: \u20B15 per hour)." },
+                        React.createElement("input", { type: "checkbox", checked: modeElec === "php_per_hour", onChange: () => setElecMode("php_per_hour") }),
+                        React.createElement("span", { className: "text-sm font-medium" }, "Set electricity cost per hour (\u20B1/hr)")),
+                    modeElec === "php_per_hour" && (React.createElement(Field, { label: `Electricity cost per hour (${PHP}/hr)`, hint: "Example: \u20B15 per hour. Formula: (\u20B1/hr) \u00D7 (print hours)." },
+                        React.createElement(Num, { value: s.electricityPhpPerHour, onChange: (v) => setS({ ...s, electricityPhpPerHour: v }), step: 0.01 }))),
+                    React.createElement("h2", { className: "mt-4 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white" }, "Labor (direct cost)"),
+                    React.createElement(Field, { label: `Labor cost (${PHP})`, hint: "Your time cost (e.g., cleaning, support removal, post-processing) (Gastos sa oras/paggawa)." },
+                        React.createElement(Num, { value: s.laborCost, onChange: (v) => setS({ ...s, laborCost: v }) }))),
+                React.createElement("section", { className: "col-span-1 space-y-3 rounded-2xl bg-white p-4 shadow" },
+                    React.createElement("h2", { className: "mb-1 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white" }, "Other Costs"),
+                    React.createElement("div", { className: "grid grid-cols-2 gap-3" },
+                        React.createElement(Field, { label: `Packaging (${PHP})`, hint: "Boxes, bubble wrap, labels (Kahon, bubble wrap, label)." },
+                            React.createElement(Num, { value: s.packaging, onChange: (v) => setS({ ...s, packaging: v }) })),
+                        React.createElement("div", { className: "col-span-2 rounded-xl border p-3" },
+                            React.createElement("div", { className: "mb-2 flex items-center justify-between gap-2" },
+                                React.createElement("div", null,
+                                    React.createElement("div", { className: "font-medium" },
+                                        "Accessories",
+                                        React.createElement(HelpInfo, { title: "Accessories", english: "Add extra parts used for your product, such as switches, keyrings, jump rings, carabiners, paracord, ball chains, gems, magnets, screws/hardware, LEDs/electronics, hooks/clips, ribbons/string, chains, or other add-ons.", tagalog: "Mga extra na piyesa na ginagamit sa product gaya ng switch, keyring, jump ring, carabiner, paracord, ball chain, gems, magnet, hardware, LED/electronics, hook, clip, ribbon, chain, at iba pa." }))),
+                                React.createElement("button", { type: "button", className: "rounded-xl border px-3 py-1.5 text-sm font-semibold hover:bg-gray-50", onClick: () => setS({ ...s, accessories: [...accessoryList, { type: "Switch", custom: "", cost: "" }] }) }, "+ Add")),
+                            React.createElement("div", { className: "space-y-2" },
+                                accessoryList.length === 0 && React.createElement("div", { className: "text-xs text-gray-400" }, "No accessories added."),
+                                accessoryList.map((a, idx) => (React.createElement("div", { key: idx, className: "grid grid-cols-[minmax(0,1.2fr)_minmax(80px,.8fr)_36px] gap-2" },
+                                    React.createElement("select", { className: "min-w-0 rounded-xl border p-2 text-sm", value: a.type || "Switch", onChange: (e) => { const next = [...accessoryList]; next[idx] = { ...a, type: e.target.value }; setS({ ...s, accessories: next }); } }, ACCESSORY_TYPES.map((t) => React.createElement("option", { key: t, value: t }, t))),
+                                    React.createElement(Num, { value: a.cost, onChange: (v) => { const next = [...accessoryList]; next[idx] = { ...a, cost: v }; setS({ ...s, accessories: next }); } }),
+                                    React.createElement("button", { type: "button", title: "Remove accessory", className: "rounded-xl border text-red-600 hover:bg-red-50", onClick: () => setS({ ...s, accessories: accessoryList.filter((_, i) => i !== idx) }) }, "\u00D7"),
+                                    a.type === "Others" && React.createElement("input", { className: "col-span-2 rounded-xl border p-2 text-sm", value: a.custom || "", placeholder: "Type accessory name\u2026", onChange: (e) => { const next = [...accessoryList]; next[idx] = { ...a, custom: e.target.value }; setS({ ...s, accessories: next }); } })))))),
+                        React.createElement(Field, { label: `Paint (${PHP})`, hint: "Paints, primers, sealers (Pintura, primer, sealer)." },
+                            React.createElement(Num, { value: s.paint, onChange: (v) => setS({ ...s, paint: v }) })),
+                        React.createElement(Field, { label: `Adhesives (${PHP})`, hint: "Glue, epoxy, CA, tape (Pandikit, epoxy, CA)." },
+                            React.createElement(Num, { value: s.adhesives, onChange: (v) => setS({ ...s, adhesives: v }) })),
+                        React.createElement(Field, { label: `Shipping (${PHP})`, hint: "Courier fees or delivery cost (Bayad sa courier o delivery)." },
+                            React.createElement(Num, { value: s.shipping, onChange: (v) => setS({ ...s, shipping: v }) })),
+                        React.createElement(Field, { label: `3D modeling fee (${PHP})`, hint: "Fee for 3D design/modelling work (Bayad para sa 3D design/modelling)." },
+                            React.createElement(Num, { value: s.modelingFee, onChange: (v) => setS({ ...s, modelingFee: v }) }))),
+                    React.createElement("h2", { className: "mt-4 rounded bg-green-600 px-3 py-1 text-lg font-bold text-white" }, "Margins"),
+                    React.createElement("div", { className: "grid grid-cols-2 gap-3" },
+                        React.createElement(Field, { label: "Failure margin (%)", hint: "Covers misprints/waste (Isinasaalang-alang ang posibleng misprints/sayang)." },
+                            React.createElement(Num, { value: s.failureMarginPct, onChange: (v) => setS({ ...s, failureMarginPct: v }) })),
+                        React.createElement(Field, { label: "Profit markup (%)", hint: "Your profit on top of CORE cost only (Tubong idinadagdag sa CORE cost lang)." },
+                            React.createElement(Num, { value: s.markupPct, onChange: (v) => setS({ ...s, markupPct: v }) })))),
+                React.createElement("section", { className: "col-span-1 space-y-3 rounded-2xl bg-white p-4 shadow" },
+                    React.createElement("h2", { className: "mt-0 rounded bg-yellow-400 px-3 py-1 text-lg font-bold text-black" }, "Computed Summary"),
+                    React.createElement("div", { className: "space-y-2 rounded-xl border p-3 text-sm" },
+                        React.createElement(Row, { label: "Price/gram" },
+                            PHP,
+                            " ",
+                            pretty(pricePerGram),
+                            " / g"),
+                        React.createElement(Row, { label: "Material cost" },
+                            PHP,
+                            " ",
+                            pretty(materialCost)),
+                        React.createElement(Row, { label: "Electricity cost" },
+                            PHP,
+                            " ",
+                            pretty(electricityCost)),
+                        React.createElement(Row, { label: "Labor cost" },
+                            PHP,
+                            " ",
+                            pretty(laborCostNum)),
+                        React.createElement("hr", null),
+                        React.createElement(Row, { label: "CORE cost (mat+elec+labor)" },
+                            PHP,
+                            " ",
+                            pretty(coreCost)),
+                        React.createElement("hr", null),
+                        React.createElement(Row, { label: "Packaging" },
+                            PHP,
+                            " ",
+                            pretty(packagingCost)),
+                        accessoryList.map((a, idx) => (React.createElement(Row, { key: idx, label: a.type === "Others" && a.custom ? a.custom : (a.type || `Accessory ${idx + 1}`) },
+                            PHP,
+                            " ",
+                            pretty(Number(a.cost) || 0)))),
+                        accessoryList.length === 0 && React.createElement(Row, { label: "Accessories" },
+                            PHP,
+                            " 0"),
+                        React.createElement(Row, { label: "Paint" },
+                            PHP,
+                            " ",
+                            pretty(paintCost)),
+                        React.createElement(Row, { label: "Adhesives" },
+                            PHP,
+                            " ",
+                            pretty(adhesivesCost)),
+                        React.createElement(Row, { label: "Shipping fee" },
+                            PHP,
+                            " ",
+                            pretty(shippingCost)),
+                        React.createElement(Row, { label: "3D modeling fee" },
+                            PHP,
+                            " ",
+                            pretty(modelingFeeCost)),
+                        React.createElement("hr", null),
+                        React.createElement(Row, { label: "Subtotal (core + other costs)" },
+                            PHP,
+                            " ",
+                            pretty(baseSubtotal)),
+                        React.createElement(Row, { label: `Failure margin (${s.failureMarginPct}% of CORE only)` },
+                            PHP,
+                            " ",
+                            pretty(failureMarginAmount)),
+                        React.createElement(Row, { label: `Mark Up (${s.markupPct}% of CORE only)` },
+                            PHP,
+                            " ",
+                            pretty(markupAmount)),
+                        React.createElement(Row, { label: "Final Price", strong: true },
+                            PHP,
+                            " ",
+                            pretty(finalPrice))))),
+            React.createElement("section", { className: "ds-mobile-links mt-6 rounded-2xl bg-white p-4 shadow" },
+                React.createElement("div", { className: "rounded bg-yellow-50 p-3 text-sm" },
+                    React.createElement("strong", null, "Kung nakatulong sa'yo ang calculator na ito, please support me para makagawa pa ako ng mga content na makakatulong sa 3D printing journey mo. Follow me on Youtube, Facebook, TikTok and Instagram.")),
+                React.createElement("div", { className: "mt-3" },
+                    React.createElement("div", { className: "font-semibold text-sm" }, "Tapo Monitoring Device I use:"),
+                    React.createElement(ExternalLink, { href: s.tapoUrl, className: "mt-2 inline-block rounded-xl border px-3 py-2 text-sm shadow-sm", title: "Open my Shopee link" }, "Open Shopee link")),
+                React.createElement("div", { className: "mt-3 flex flex-wrap gap-2" },
+                    React.createElement(ExternalLink, { href: s.facebookUrl, className: "rounded-2xl border border-blue-600 bg-blue-600 px-3 py-2 text-sm text-white shadow-sm", title: "Follow me on Facebook" }, "Facebook"),
+                    React.createElement(ExternalLink, { href: s.tiktokUrl, className: "rounded-2xl border border-black bg-black px-3 py-2 text-sm text-white shadow-sm", title: "Follow me on TikTok" }, "TikTok"),
+                    React.createElement(ExternalLink, { href: s.youtubeUrl, className: "rounded-2xl border border-red-600 bg-red-600 px-3 py-2 text-sm text-white shadow-sm", title: "Follow me on YouTube" }, "YouTube"),
+                    React.createElement(ExternalLink, { href: s.instagramUrl, className: "rounded-2xl border border-fuchsia-600 bg-fuchsia-600 px-3 py-2 text-sm text-white shadow-sm", title: "Follow me on Instagram" }, "Instagram")),
+                React.createElement("div", { className: "mt-3" },
+                    React.createElement(ExternalLink, { href: "https://youtu.be/5kikGZ-876A?si=aebU-45P01a4zZDL", className: "inline-flex items-center rounded-2xl border border-red-600 bg-white px-3 py-2 text-sm font-semibold text-red-600 shadow-sm hover:bg-red-50", title: "Watch the video guide on YouTube" }, "▶ How to Use This Calculator / Video Guide")),
+                useCount !== null && React.createElement("div", { className: "mt-4 text-center text-sm text-gray-600" },
+                    React.createElement("strong", null, useCount.toLocaleString()),
+                    " people have used this 3D printing calculator.")),
+            React.createElement("details", { className: "mt-6 rounded-2xl bg-white p-4 shadow" },
+                React.createElement("summary", { className: "cursor-pointer text-sm font-semibold text-gray-700" }, "Advanced / Developer Tools"),
+                React.createElement("p", { className: "mt-2 text-xs text-gray-500" }, "These controls are not needed for normal price calculations."),
+                React.createElement("div", { className: "mt-3 flex flex-wrap gap-2" },
+                    React.createElement("button", { onClick: () => setMode(s.pricingMode === "derive" ? "fixed" : "derive"), className: "rounded-xl border px-3 py-2 text-sm" }, "Toggle Pricing Mode"),
+                    React.createElement("button", { onClick: selfTest, className: "rounded-xl border px-3 py-2 text-sm", title: "Runs internal sanity checks on calculator math" }, "Run Self-Test"),
+                    React.createElement("button", { onClick: resetEverything, className: "rounded-xl border px-3 py-2 text-sm text-red-700" }, "Reset Everything"))),
+            React.createElement("div", { className: "fixed bottom-0 left-0 right-0 z-50 border-t bg-white/95 p-2 text-center shadow md:hidden" },
+                React.createElement("span", { className: "text-xs text-gray-500" }, "Final Price "),
+                React.createElement("strong", null,
+                    PHP,
+                    " ",
+                    pretty(finalPrice))),
+            React.createElement("footer", { className: "mt-6 pb-12 text-center text-xs text-gray-500 md:pb-0" }, "Built for GitHub Pages \u00B7 DS3DP v1.8 \u00B7 Multi-currency"))));
+}
+function Field({ label, children, hint }) {
+    const raw = String(label || "");
+    const base = raw
+        .replace(/\s*\([^)]*\)\s*$/,"")
+        .replace(/^Select\s+/i,"")
+        .trim();
+    const tagalogMap = {
+        "Product Name":"Pangalan ng product na kino-compute mo at gagamitin sa exported file names.",
+        "Spool price":"Kabuuang presyo ng isang spool ng filament.",
+        "Spool weight":"Bigat ng buong spool, kadalasan 1000 g para sa 1 kg spool.",
+        "Set price":"Sarili mong itinakdang presyo kada gram.",
+        "Filament consumed":"Dami ng filament na nagamit ayon sa estimate ng slicer pagkatapos mag-slice.",
+        "Print time":"Kabuuang oras ng pag-print. Makikita ito sa slicer.",
+        "Electricity price":"Presyo ng kuryente kada kWh. Makikita ito sa electricity bill.",
+        "Printer wattage":"Average na konsumo ng kuryente ng printer sa watts.",
+        "printer model":"Pumili ng printer preset base sa monitoring-device readings. Approximate lang ang values.",
+        "Custom average power":"Ilagay ang sarili mong average kW value mula sa monitoring device.",
+        "Electricity cost per hour":"Fixed na gastos sa kuryente kada oras ng pag-print.",
+        "Labor cost":"Bayad sa oras/paggawa gaya ng cleaning, support removal, post-processing, o assembly.",
+        "Packaging":"Kahon, bubble wrap, labels, at iba pang packaging materials.",
+        "Paint":"Pintura, primer, sealer, at ibang finishing materials.",
+        "Adhesives":"Pandikit gaya ng glue, epoxy, CA glue, o tape.",
+        "Shipping":"Bayad sa courier o delivery.",
+        "3D modeling fee":"Bayad para sa 3D design o modeling work.",
+        "Failure margin":"Allowance para sa posibleng failed prints o sayang; CORE cost lang ang base.",
+        "Profit markup":"Porsiyento ng tubo na idinadagdag sa CORE cost lang."
+    };
+    let tl = "";
+    Object.keys(tagalogMap).some(k => {
+        if (base.toLowerCase().includes(k.toLowerCase())) { tl = tagalogMap[k]; return true; }
+        return false;
+    });
+    if (!tl && hint && hint.includes("(") && hint.endsWith(")")) {
+        const p = hint.lastIndexOf("(");
+        tl = hint.slice(p + 1, -1);
+    }
+    return (React.createElement("div", { className: "flex flex-col gap-1" },
+        React.createElement("label", { className: "text-sm font-medium text-gray-700" },
+            label,
+            hint ? React.createElement(HelpInfo, { title: base || raw, english: hint, tagalog: tl || "Paliwanag para sa field na ito." }) : null
+        ),
+        children));
+}
+function Num({ value, onChange, min, step = 0.01, placeholder }) {
+    return (React.createElement("input", { type: "number", value: value, min: min, step: step, onChange: (e) => onChange(e.target.value), placeholder: placeholder, className: "w-full rounded-xl border p-2 outline-none focus:border-gray-400" }));
+}
+function Row({ label, children, strong }) {
+    return (React.createElement("div", { className: "flex items-center justify-between" },
+        React.createElement("span", { className: "text-gray-600" }, label),
+        React.createElement("span", { className: strong ? "font-semibold" : undefined }, children)));
+}
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+
+</script>
+<script>
+var b=document.getElementById("boot");
+if(b && document.getElementById("root").children.length) b.remove();
+</script>
+
+<script>
+document.addEventListener("click",function(e){
+  if(!e.target.closest(".ds-help-wrap")){
+    document.querySelectorAll(".ds-help-wrap.ds-open").forEach(function(el){el.classList.remove("ds-open");});
+  }
+});
+</script>
+
+</body>
 </html>
