@@ -11,7 +11,14 @@
 body{margin:0;background:#f9fafb}
 #boot{padding:24px;font-family:Arial,sans-serif;color:#374151}
 
-/* v1.8 help additions only — original calculator layout/styles remain unchanged */
+/* v1.9 improved desktop layout and accessory controls */
+@media(min-width:1024px){.ds-main-width{max-width:1536px!important}}
+.ds-accessory-row{grid-template-columns:minmax(0,2.6fr) minmax(92px,104px) 24px!important;align-items:center}
+.ds-accessory-name{font-size:11px!important;padding:7px 3px!important;width:100%;min-width:0}
+.ds-accessory-remove{width:22px;height:22px;min-width:22px;border-radius:6px!important;padding:0!important;font-size:12px!important;line-height:18px!important}
+.ds-accessory-cost input{width:100%;min-width:0;padding:6px 4px!important;font-size:12px!important}
+@media(max-width:400px){.ds-accessory-row{grid-template-columns:minmax(0,2fr) minmax(82px,95px) 22px!important}}
+
 .ds-help-wrap{position:relative;display:inline-flex;align-items:center;margin-left:5px;vertical-align:middle}
 .ds-help-btn{width:18px;height:18px;min-width:18px;border:1px solid #d1d5db;border-radius:9999px;background:#fff;color:#6b7280;font-size:11px;font-weight:700;line-height:16px;text-align:center;padding:0;cursor:pointer}
 .ds-help-btn:hover,.ds-help-btn:focus{background:#f3f4f6;color:#111827;outline:none}
@@ -110,13 +117,10 @@ const KW_PRESETS = [
     { key: "bambu_h2c", label: "Bambu Lab H2C PLA — 0.128 kW", kw: 0.128 },
     { key: "other", label: "Other (Custom kW)", kw: null },
 ];
-const CURRENCIES = [
-    { code: "PHP", symbol: "₱", label: "₱ PHP" }, { code: "USD", symbol: "$", label: "$ USD" },
-    { code: "EUR", symbol: "€", label: "€ EUR" }, { code: "GBP", symbol: "£", label: "£ GBP" },
-    { code: "JPY", symbol: "¥", label: "¥ JPY" }, { code: "KRW", symbol: "₩", label: "₩ KRW" },
-    { code: "SGD", symbol: "S$", label: "S$ SGD" }, { code: "AUD", symbol: "A$", label: "A$ AUD" },
-    { code: "CAD", symbol: "C$", label: "C$ CAD" },
-];
+const CURRENCY_FALLBACK = ["PHP","USD","EUR","GBP","JPY","KRW","SGD","MYR","THB","IDR","VND","AUD","NZD","CAD","INR","AED","SAR","CNY","TWD","HKD","CHF","SEK","NOK","DKK","BRL","MXN","ZAR","TRY","PLN","CZK","HUF","RUB","EGP","NGN","KES","PKR","BDT","LKR"];
+const CURRENCY_CODES = (() => { try { return Intl.supportedValuesOf("currency"); } catch (_) { return CURRENCY_FALLBACK; } })();
+function currencySymbol(code) { try { return new Intl.NumberFormat("en",{style:"currency",currency:code,currencyDisplay:"narrowSymbol"}).formatToParts(0).find(x=>x.type==="currency")?.value || code; } catch (_) { return code; } }
+const CURRENCIES = [...new Set(["PHP",...CURRENCY_CODES])].map(code=>({code,symbol:currencySymbol(code),label:code+" — "+currencySymbol(code)}));
 const ACCESSORY_TYPES = ["Switch", "Keyring", "Jump ring", "Carabiner", "Paracord", "Ball chain", "Gems", "Magnet", "Screws/Hardware", "LED/Electronics", "Hook/Clip", "Ribbon/String", "Chain", "Others"];
 const HELP_KW_HINT = "Pumili ng printer model sa listahan. Lahat ng nasa listahan ay based sa readings ng aking monitoring device at approximate lang. Kung wala ang printer mo sa list, piliin ang Other at maglagay ng sarili mong kW value.";
 const STORAGE_KEY = "ds3dpc_v1_7";
@@ -204,7 +208,7 @@ function ExternalLink({ href, className, title, children }) {
 const CALCULATOR_GUIDE = [
     ["Product Name","Identifies this calculation and is used in exported file names.","Pangalan ng product na kino-compute mo at gagamitin din sa pangalan ng exported files."],
     ["Currency","Choose the currency symbol used by the calculator. This does not convert exchange rates.","Piliin ang currency na gagamitin sa presyo. Hindi ito automatic currency conversion."],
-    ["Product Files","JSON keeps an editable project. PNG, PDF, and CSV keep product computation records.","Ang JSON ay editable project file. Ang PNG, PDF, at CSV ay records ng computation ng product."],
+    ["Product Files","PNG saves an image, PDF a printable copy, and CSV a spreadsheet-ready file. JSON saves an editable project.",""],
     ["Derive from spool","Uses the spool price and spool weight to calculate the filament price per gram.","Kinukuha ang price per gram gamit ang presyo at bigat ng buong spool."],
     ["Spool price","Total cost of one filament spool.","Kabuuang presyo ng isang spool ng filament."],
     ["Spool weight","Weight of the entire spool, usually 1000 g for a 1 kg spool.","Bigat ng buong spool, kadalasan 1000 g para sa 1 kg spool."],
@@ -282,24 +286,73 @@ function CalculatorGuide() {
     );
 }
 
+
+function OnlineSellingFees({base,symbol}) {
+  const [fees,setFees]=usePersistedState("ds3dpc_online_fees_v1",{enabled:false,platform:"Shopee",commission:"0",transaction:"0",processing:"5",advertising:"0",taxOn:false,tax:"0.5",other:[]});
+  const set=(key,value)=>setFees(prev=>({...prev,[key]:value}));
+  const n=x=>Math.max(0,Number(x)||0), on=!!fees.enabled;
+  const percent=on?n(fees.commission)+n(fees.transaction)+(fees.taxOn?n(fees.tax):0):0;
+  const others=Array.isArray(fees.other)?fees.other:[];
+  const extra=on?others.filter(x=>x.enabled).reduce((sum,x)=>sum+n(x.amount),0):0;
+  const fixed=on?n(fees.processing)+n(fees.advertising)+extra:0;
+  const valid=percent<100;
+  const total=valid?(base+fixed)/(1-percent/100):NaN;
+  const cash=v=>symbol+" "+pretty(v);
+  const add=()=>set("other",[...others,{id:Date.now()+"_"+Math.random(),name:"",amount:"0",enabled:true}]);
+  const update=(id,change)=>set("other",others.map(x=>x.id===id?{...x,...change}:x));
+  const field=(label,key,hint)=>React.createElement(Field,{label,hint},React.createElement(Num,{value:fees[key],onChange:v=>set(key,v)}));
+  return React.createElement("section",{className:"mt-6 rounded-2xl bg-white p-4 shadow"},
+    React.createElement("div",{className:"flex flex-wrap items-center justify-between gap-3"},
+      React.createElement("h2",{className:"rounded bg-green-600 px-3 py-1 text-lg font-bold text-white"},"Online Selling Platform"),
+      React.createElement("label",{className:"flex items-center gap-2 text-sm"},React.createElement("input",{type:"checkbox",checked:on,onChange:e=>set("enabled",e.target.checked)})," Enable / I-activate")),
+    React.createElement("p",{className:"my-3 text-sm text-gray-600"},"Add online selling deductions without reducing your intended price. / Idinadagdag ang online fees para hindi mabawasan ang target na presyo."),
+    React.createElement("div",{className:"grid grid-cols-1 gap-3 md:grid-cols-2"},
+      React.createElement(Field,{label:"Selling Platform",hint:"All rates are editable. / Maaaring baguhin ang rates."},
+        React.createElement("select",{disabled:!on,className:"w-full rounded-xl border p-2",value:fees.platform,onChange:e=>set("platform",e.target.value)},
+          ["Shopee","TikTok Shop","Lazada","Etsy","Amazon","eBay","Shopify","Other / Custom"].map(x=>React.createElement("option",{key:x},x)))),
+      React.createElement("div",{className:"rounded-xl border bg-yellow-50 p-3"},React.createElement("div",{className:"text-sm text-gray-600"},"Original Final Price / Presyo bago online fees"),React.createElement("div",{className:"text-xl font-bold"},cash(base)))),
+    on&&React.createElement(React.Fragment,null,
+      React.createElement("div",{className:"mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4"},
+        field("Commission Fee (%)","commission","Platform commission. / Komisyon ng platform."),
+        field("Transaction Fee (%)","transaction","Payment processing fee. / Bayad sa transaction."),
+        field("Order Processing Fee ("+symbol+"/order)","processing","Fixed fee per order; default 5. / Bayad kada order."),
+        field("Advertising Fee ("+symbol+"/sale)","advertising","Ad cost allocated per sale. / Gastos sa ads kada sale.")),
+      React.createElement("div",{className:"mt-4 flex flex-wrap items-center gap-3"},
+        React.createElement("label",{className:"flex items-center gap-2 text-sm"},React.createElement("input",{type:"checkbox",checked:!!fees.taxOn,onChange:e=>set("taxOn",e.target.checked)}),"Withholding Tax / Buwis na kinakaltas"),
+        React.createElement("div",{className:"w-28"},React.createElement(Num,{value:fees.tax,onChange:v=>set("tax",v)})),React.createElement("span",null,"%")),
+      React.createElement("p",{className:"mt-1 text-xs text-gray-500"},"Withholding tax is a payout deduction, not necessarily a business expense. / Maaaring tax credit ang withholding."),
+      React.createElement("div",{className:"mt-4 flex items-center justify-between gap-2"},
+        React.createElement("h3",{className:"font-semibold"},"Other Fees / Iba pang fixed fees"),
+        React.createElement("button",{type:"button",className:"rounded-xl border px-3 py-2 text-sm",onClick:add},"+ Add Fee")),
+      React.createElement("p",{className:"text-xs text-gray-500"},"Packaging is already included in the original calculator. / Nasa original section na ang packaging."),
+      others.map(x=>React.createElement("div",{key:x.id,className:"mt-2 flex flex-wrap items-center gap-2"},
+        React.createElement("input",{type:"checkbox",checked:x.enabled,onChange:e=>update(x.id,{enabled:e.target.checked})}),
+        React.createElement("input",{className:"min-w-0 flex-1 rounded-xl border p-2",placeholder:"Fee name / Pangalan",value:x.name,onChange:e=>update(x.id,{name:e.target.value})}),
+        React.createElement("div",{className:"w-28"},React.createElement(Num,{value:x.amount,onChange:v=>update(x.id,{amount:v})})),
+        React.createElement("button",{type:"button",className:"rounded-xl border px-3 py-2 text-red-700",onClick:()=>set("other",others.filter(y=>y.id!==x.id))},"Remove")))),
+    React.createElement("div",{className:"mt-4 rounded-xl border border-yellow-300 bg-yellow-50 p-4 text-sm"},
+      React.createElement("h3",{className:"mb-2 font-bold"},"Online Selling Breakdown / Detalye ng presyo"),
+      React.createElement(Row,{label:"Original final price"},cash(base)),
+      on&&valid&&React.createElement(React.Fragment,null,
+        React.createElement(Row,{label:"Commission Fee"},cash(total*n(fees.commission)/100)),
+        React.createElement(Row,{label:"Transaction Fee"},cash(total*n(fees.transaction)/100)),
+        React.createElement(Row,{label:"Order Processing Fee"},cash(n(fees.processing))),
+        React.createElement(Row,{label:"Advertising Fee"},cash(n(fees.advertising))),
+        React.createElement(Row,{label:"Other Fees"},cash(extra)),
+        React.createElement(Row,{label:"Withholding Tax (separate)"},cash(fees.taxOn?total*n(fees.tax)/100:0)),
+        React.createElement(Row,{label:"Total deductions"},cash(total-base))),
+      React.createElement("hr",{className:"my-2"}),
+      React.createElement(Row,{label:"Suggested Listing Price / Presyo sa platform",strong:true},valid?cash(total):"Invalid percentage fees (must be below 100%)"),
+      React.createElement(Row,{label:"After deductions / Matatanggap"},valid?cash(base):"—")),
+    React.createElement("details",{className:"mt-4 rounded-xl border p-3"},
+      React.createElement("summary",{className:"cursor-pointer font-semibold"},"Online Selling Guide / Legend — English & Tagalog"),
+      React.createElement("div",{className:"mt-3 space-y-2 text-sm"},
+        [["Commission Fee","Platform percentage commission.","Porsyentong komisyon ng platform."],["Transaction Fee","Payment processing percentage.","Porsyento sa pagproseso ng bayad."],["Order Processing Fee","Fixed charge per order, not per item.","Fixed na bayad kada order, hindi kada item."],["Advertising Fee","Ad cost allocated to one sale.","Gastos sa ads kada sale."],["Withholding Tax","Tax withheld from payout, potentially creditable.","Buwis na kinakaltas na maaaring tax credit."],["Other Fees","Optional fixed fees, excluding packaging.","Dagdag na fixed fees, hindi kasama ang packaging."],["Pricing","Gross-up preserves your original target price.","Dinadagdag ang fees para hindi mabawasan ang target na presyo."]].map(([name,en,tl])=>React.createElement("p",{key:name},React.createElement("strong",null,name+": "),en,React.createElement("br"),React.createElement("span",{className:"text-gray-600"},tl))),
+        React.createElement("p",{className:"text-xs text-gray-500"},"Example: target 100, fixed fees 5, percentage fees 10% → listing price 116.67. Assumes fees use the listing price as their base and one order; actual platform and tax rules vary."))));
+}
+
 function App() {
     const [s, setS] = usePersistedState(STORAGE_KEY, INITIAL_STATE);
-    useEffect(() => {
-        try {
-            const already = localStorage.getItem(WIPE_ONCE_KEY);
-            if (already === "1")
-                return;
-            localStorage.removeItem("ds3dpc_v1_4");
-            localStorage.removeItem("ds3dpc_v1_5");
-            localStorage.removeItem("ds3dpc_v1_6");
-            localStorage.removeItem("ds3dpc_v1_7");
-            localStorage.removeItem("ds3dpc_v1_7");
-            localStorage.setItem(WIPE_ONCE_KEY, "1");
-            setS(INITIAL_STATE);
-        }
-        catch (_a) { }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
     const [useCount, setUseCount] = useState(null);
     const jsonInputRef = useRef(null);
     const [lastProjectSave, setLastProjectSave] = useState(null);
@@ -882,10 +935,10 @@ function App() {
         }
     };
     return (React.createElement("div", { className: "min-h-screen bg-gray-50 p-6" },
-        React.createElement("div", { className: "mx-auto max-w-5xl" },
+        React.createElement("div", { className: "ds-main-width mx-auto max-w-5xl" },
             React.createElement("header", { className: "mb-4" },
                 React.createElement("h1", { className: "text-2xl font-bold" }, "Dr Shiela 3D Prints 3D Printing Calculator \uD83C\uDDF5\uD83C\uDDED"),
-                React.createElement("p", { className: "text-sm text-gray-600" }, "Version 1.8 \u00B7 Autosaves current work in this browser \u00B7 Multi-currency")),
+                React.createElement("p", { className: "text-sm text-gray-600" }, "Version 1.9 \u00B7 Wider desktop layout \u00B7 Improved accessory fields \u00B7 Online selling fees \u00B7 Multi-currency")),
             React.createElement("section", { className: "mb-4 rounded-2xl border bg-white p-4 shadow-sm" },
                 React.createElement("div", { className: "grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end" },
                     React.createElement(Field, { label: "Product Name", hint: "Identifies this calculation and is used in exported file names." },
@@ -914,6 +967,7 @@ function App() {
                         React.createElement("button", { onClick: savePNG, title: "Save the computation details as an image for your product records.", className: "rounded-xl border px-3 py-2 text-sm" }, "PNG \u24D8"),
                         React.createElement("button", { onClick: savePDF, title: "Save a complete, printable computation record for this product.", className: "rounded-xl border px-3 py-2 text-sm" }, "PDF \u24D8"),
                         React.createElement("button", { onClick: saveCurrentCSV, title: "Save the computation data as a spreadsheet-compatible file for your product records and tracking.", className: "rounded-xl border px-3 py-2 text-sm" }, "CSV \u24D8"))),
+                React.createElement("p", {className:"mt-2 text-xs text-gray-600"},"Save a copy of your calculation: PNG for an image, PDF for printing, or CSV for Excel and spreadsheets. Use JSON if you want to edit the calculation later."),
                 React.createElement("div", { className: "mt-2 text-xs text-gray-500" }, lastProjectSave ? "✓ JSON project saved/loaded · Current work continues to autosave locally" : "● Current work autosaves in this browser · JSON is your portable editable copy")),
             React.createElement(CalculatorGuide, null),
             React.createElement("div", { className: "grid grid-cols-1 gap-4 md:grid-cols-4" },
@@ -1021,10 +1075,10 @@ function App() {
                                 React.createElement("button", { type: "button", className: "rounded-xl border px-3 py-1.5 text-sm font-semibold hover:bg-gray-50", onClick: () => setS({ ...s, accessories: [...accessoryList, { type: "Switch", custom: "", cost: "" }] }) }, "+ Add")),
                             React.createElement("div", { className: "space-y-2" },
                                 accessoryList.length === 0 && React.createElement("div", { className: "text-xs text-gray-400" }, "No accessories added."),
-                                accessoryList.map((a, idx) => (React.createElement("div", { key: idx, className: "grid grid-cols-[minmax(0,1.2fr)_minmax(80px,.8fr)_36px] gap-2" },
-                                    React.createElement("select", { className: "min-w-0 rounded-xl border p-2 text-sm", value: a.type || "Switch", onChange: (e) => { const next = [...accessoryList]; next[idx] = { ...a, type: e.target.value }; setS({ ...s, accessories: next }); } }, ACCESSORY_TYPES.map((t) => React.createElement("option", { key: t, value: t }, t))),
-                                    React.createElement(Num, { value: a.cost, onChange: (v) => { const next = [...accessoryList]; next[idx] = { ...a, cost: v }; setS({ ...s, accessories: next }); } }),
-                                    React.createElement("button", { type: "button", title: "Remove accessory", className: "rounded-xl border text-red-600 hover:bg-red-50", onClick: () => setS({ ...s, accessories: accessoryList.filter((_, i) => i !== idx) }) }, "\u00D7"),
+                                accessoryList.map((a, idx) => (React.createElement("div", { key: idx, className: "ds-accessory-row grid gap-2" },
+                                    React.createElement("select", { className: "ds-accessory-name min-w-0 rounded-xl border p-2 text-sm", value: a.type || "Switch", onChange: (e) => { const next = [...accessoryList]; next[idx] = { ...a, type: e.target.value }; setS({ ...s, accessories: next }); } }, ACCESSORY_TYPES.map((t) => React.createElement("option", { key: t, value: t }, t))),
+                                    React.createElement("div", {className:"ds-accessory-cost"}, React.createElement(Num, { value: a.cost, onChange: (v) => { const next = [...accessoryList]; next[idx] = { ...a, cost: v }; setS({ ...s, accessories: next }); } })),
+                                    React.createElement("button", { type: "button", title: "Remove accessory", className: "ds-accessory-remove rounded-xl border text-red-600 hover:bg-red-50", onClick: () => setS({ ...s, accessories: accessoryList.filter((_, i) => i !== idx) }) }, "\u00D7"),
                                     a.type === "Others" && React.createElement("input", { className: "col-span-2 rounded-xl border p-2 text-sm", value: a.custom || "", placeholder: "Type accessory name\u2026", onChange: (e) => { const next = [...accessoryList]; next[idx] = { ...a, custom: e.target.value }; setS({ ...s, accessories: next }); } })))))),
                         React.createElement(Field, { label: `Paint (${PHP})`, hint: "Paints, primers, sealers (Pintura, primer, sealer)." },
                             React.createElement(Num, { value: s.paint, onChange: (v) => setS({ ...s, paint: v }) })),
@@ -1110,6 +1164,7 @@ function App() {
                             PHP,
                             " ",
                             pretty(finalPrice))))),
+            React.createElement(OnlineSellingFees, {base:finalPrice,symbol:PHP}),
             React.createElement("section", { className: "ds-mobile-links mt-6 rounded-2xl bg-white p-4 shadow" },
                 React.createElement("div", { className: "rounded bg-yellow-50 p-3 text-sm" },
                     React.createElement("strong", null, "Kung nakatulong sa'yo ang calculator na ito, please support me para makagawa pa ako ng mga content na makakatulong sa 3D printing journey mo. Follow me on Youtube, Facebook, TikTok and Instagram.")),
